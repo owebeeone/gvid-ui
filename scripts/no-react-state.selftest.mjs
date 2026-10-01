@@ -181,6 +181,40 @@ test('permits type-only React names and unrelated runtime APIs through scanner a
   assertCliCases(cases, true);
 });
 
+test('rejects global React access and aliased CommonJS loaders', () => {
+  assertCliCases([
+    { source: 'const R=globalThis["React"]; const {useState:state}=R; state(0);', hook: 'useState', extension: 'js' },
+    { source: 'const R=window[`React`]; R["useState"](0);', hook: 'useState', extension: 'js' },
+    { source: 'const R=self["Re"+"act"]; R.useState(0);', hook: 'useState', extension: 'js' },
+    { source: 'globalThis["React"]["useState"](0);', hook: 'useState', extension: 'js' },
+    { source: 'const R=Reflect.get(globalThis,"React"); R.useState(0);', hook: 'useState', extension: 'js' },
+    { source: 'const load=require; const {useState:state}=load("react"); state(0);', hook: 'useState', extension: 'cjs' },
+    { source: 'const load=require; const load2=load; const {useState:state}=load2("react"); state(0);', hook: 'useState', extension: 'cjs' },
+    { source: 'export {}; declare global { var React: typeof import("react"); } export function Panel(){ return React.useState(0)[0]; }', hook: 'useState', extension: 'tsx' },
+  ]);
+});
+
+test('rejects React class bases, React DOM hooks, and dynamic import options', () => {
+  assertCliCases([
+    { source: 'import {Component} from "react"; export class Panel extends Component { state={count:0}; render(){ return this.state.count; } }', hook: 'React class component base', extension: 'tsx' },
+    { source: 'import {PureComponent as Base} from "react"; export class Panel extends Base { state={count:0}; render(){ return this.state.count; } }', hook: 'React class component base', extension: 'tsx' },
+    { source: 'import {useFormState as action} from "react-dom"; action(()=>0,0);', hook: 'useFormState', extension: 'tsx' },
+    { source: 'import * as DOM from "react-dom"; DOM.useFormState(()=>0,0);', hook: 'useFormState', extension: 'tsx' },
+    { source: 'import * as DOM from "react-dom"; DOM["useFormState"](()=>0,0);', hook: 'useFormState', extension: 'tsx' },
+    { source: 'const R=await import("react",{}); R.useState(0);', hook: 'React runtime namespace access', extension: 'tsx' },
+    { source: 'const R=await import(moduleName,{});', hook: 'React runtime namespace access', extension: 'tsx' },
+  ]);
+  assertCliCases([
+    { source: 'import type {Component, PureComponent} from "react"; type C=Component;', extension: 'tsx' },
+    { source: 'import type {useFormState} from "react-dom"; type F=typeof useFormState;', extension: 'tsx' },
+    { source: 'import {createPortal} from "react-dom"; export const portal=createPortal;', extension: 'tsx' },
+    { source: 'import ReactDOM from "react-dom/client"; ReactDOM.createRoot(document.body);', extension: 'tsx' },
+    { source: 'const globalThis={React:{useState:()=>1}}; globalThis["React"]["useState"]();', extension: 'js' },
+    { source: 'const require=()=>({useState:()=>1}); const load=require; load("react").useState();', extension: 'js' },
+    { source: 'const R=await import("unrelated-module",{});', extension: 'tsx' },
+  ], true);
+});
+
 function assertCliCases(cases, shouldPass = false) {
   const root = mkdtempSync(join(tmpdir(), 'gvid-hook-cases-'));
   try {
