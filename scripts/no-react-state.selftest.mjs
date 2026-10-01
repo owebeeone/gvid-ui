@@ -57,6 +57,18 @@ test('rejects constant computed hooks and unresolved React member calls', () => 
   assert.deepEqual(scanSource('other[hookName](0);'), []);
 });
 
+test('rejects wrapped and locally aliased React namespace receivers', () => {
+  for (const source of [
+    'import * as React from "react"; const hookName="useState"; function Panel() { return (React)[hookName](0)[0]; }',
+    'import * as React from "react"; const hookName="useState"; function Panel() { const R=React; return R[hookName](0)[0]; }',
+    'import * as React from "react"; const hookName="useState"; function Panel() { const R=(React); const S=R; return (S as typeof React)[hookName](0)[0]; }',
+    'import ReactAlias from "react"; const hookName="useState"; function Panel() { return ReactAlias[hookName](0)[0]; }',
+  ]) {
+    assert.deepEqual(scanSource(source), [{ hook: 'unresolved React member', line: 1 }], source);
+  }
+  assert.deepEqual(scanSource('const hookName="safe"; const other={}; other[hookName](0);'), []);
+});
+
 test('ignores comments, ordinary strings, regexes, and longer identifiers', () => {
   const source = [
     '// useState()',
@@ -96,6 +108,8 @@ test('checks source, entries, app, packages, and a root entry point', () => {
       ['src/escaped.tsx', String.raw`import * as React from 'react'; export function Panel() { return React.use\u0053tate(0)[0]; }`],
       ['src/concat.tsx', 'React["use" + "State"](0);'],
       ['src/template.tsx', 'React[`use${"State"}`](0);'],
+      ['src/wrapped.tsx', 'import * as React from "react"; const hookName="useState"; function Panel() { return (React)[hookName](0)[0]; }'],
+      ['src/alias.tsx', 'import * as React from "react"; const hookName="useState"; function Panel() { const R=React; return R[hookName](0)[0]; }'],
       ['entries/desktop/main.tsx', 'useEffect();'],
       ['app/src/view.tsx', 'useRef();'],
       ['packages/plugins/view/src/index.tsx', 'useMemo();'],
@@ -109,11 +123,13 @@ test('checks source, entries, app, packages, and a root entry point', () => {
       writeFileSync(target, source);
     }
     const result = checkTree(root);
-    assert.equal(result.files, 8);
-    assert.equal(result.violations.length, 8);
+    assert.equal(result.files, 10);
+    assert.equal(result.violations.length, 10);
     assert.ok(result.violations.includes('src/escaped.tsx:1  uses useState'));
     assert.ok(result.violations.includes('src/concat.tsx:1  uses useState'));
     assert.ok(result.violations.includes('src/template.tsx:1  uses useState'));
+    assert.ok(result.violations.includes('src/wrapped.tsx:1  uses unresolved React member'));
+    assert.ok(result.violations.includes('src/alias.tsx:1  uses unresolved React member'));
     assert.ok(result.violations.some((v) => v === 'entries/desktop/main.tsx:1  uses useEffect'));
     assert.ok(result.violations.some((v) => v === 'packages/plugins/view/src/index.tsx:1  uses useMemo'));
 
@@ -125,6 +141,8 @@ test('checks source, entries, app, packages, and a root entry point', () => {
     assert.match(failed.stderr, /src\/escaped\.tsx:1  uses useState/);
     assert.match(failed.stderr, /src\/concat\.tsx:1  uses useState/);
     assert.match(failed.stderr, /src\/template\.tsx:1  uses useState/);
+    assert.match(failed.stderr, /src\/wrapped\.tsx:1  uses unresolved React member/);
+    assert.match(failed.stderr, /src\/alias\.tsx:1  uses unresolved React member/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

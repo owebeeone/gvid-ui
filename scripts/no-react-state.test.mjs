@@ -52,6 +52,32 @@ export function scanSource(source, fileName = 'source.tsx') {
       reactNamespaces.add(clause.namedBindings.name.text);
     }
   }
+  const aliases = new Map();
+  function collectAliases(node) {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      aliases.set(node.name.text, node.initializer);
+    }
+    ts.forEachChild(node, collectAliases);
+  }
+  collectAliases(file);
+  const unwrap = (node) => {
+    while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) ||
+           ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node) ||
+           ts.isNonNullExpression(node)) node = node.expression;
+    return node;
+  };
+  const isReactNamespace = (receiver, seen = new Set()) => {
+    const node = unwrap(receiver);
+    if (ts.isIdentifier(node)) {
+      if (reactNamespaces.has(node.text)) return true;
+      if (seen.has(node.text) || !aliases.has(node.text)) return false;
+      seen.add(node.text);
+      return isReactNamespace(aliases.get(node.text), seen);
+    }
+    return ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
+      node.expression.text === 'require' && node.arguments.length === 1 &&
+      ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === 'react';
+  };
   const record = (hook, node) => {
     if (BANNED.has(hook)) {
       const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
@@ -84,8 +110,7 @@ export function scanSource(source, fileName = 'source.tsx') {
     if (ts.isElementAccessExpression(node)) {
       const name = staticName(node.argumentExpression);
       record(name, node);
-      if (name === undefined && ts.isIdentifier(node.expression) &&
-          reactNamespaces.has(node.expression.text)) {
+      if (name === undefined && isReactNamespace(node.expression)) {
         const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
         violations.push({ hook: 'unresolved React member', line });
       }
