@@ -43,19 +43,52 @@ function scriptKind(fileName) {
 export function scanSource(source, fileName = 'source.tsx') {
   const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKind(fileName));
   const violations = [];
+  const reactNamespaces = new Set(['React']);
+  for (const statement of file.statements) {
+    if (!ts.isImportDeclaration(statement) || statement.moduleSpecifier.text !== 'react') continue;
+    const clause = statement.importClause;
+    if (clause?.name) reactNamespaces.add(clause.name.text);
+    if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
+      reactNamespaces.add(clause.namedBindings.name.text);
+    }
+  }
   const record = (hook, node) => {
     if (BANNED.has(hook)) {
       const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
       violations.push({ hook, line });
     }
   };
-  const staticName = (node) =>
-    node && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) ? node.text : undefined;
+  const staticName = (node) => {
+    if (!node) return undefined;
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return node.text;
+    if (ts.isParenthesizedExpression(node)) return staticName(node.expression);
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const left = staticName(node.left);
+      const right = staticName(node.right);
+      return left === undefined || right === undefined ? undefined : left + right;
+    }
+    if (ts.isTemplateExpression(node)) {
+      let value = node.head.text;
+      for (const span of node.templateSpans) {
+        const part = staticName(span.expression);
+        if (part === undefined) return undefined;
+        value += part + span.literal.text;
+      }
+      return value;
+    }
+    return undefined;
+  };
 
   function visit(node) {
     if (ts.isIdentifier(node)) record(node.text, node);
     if (ts.isElementAccessExpression(node)) {
-      record(staticName(node.argumentExpression), node);
+      const name = staticName(node.argumentExpression);
+      record(name, node);
+      if (name === undefined && ts.isIdentifier(node.expression) &&
+          reactNamespaces.has(node.expression.text)) {
+        const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+        violations.push({ hook: 'unresolved React member', line });
+      }
     }
     if (ts.isComputedPropertyName(node)) record(staticName(node.expression), node);
     ts.forEachChild(node, visit);

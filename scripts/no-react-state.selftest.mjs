@@ -40,6 +40,23 @@ test('rejects the filed escaped React member counterexample', () => {
   assert.deepEqual(scanSource(source), [{ hook: 'useState', line: 1 }]);
 });
 
+test('rejects constant computed hooks and unresolved React member calls', () => {
+  for (const source of [
+    'React["use" + "State"](0);',
+    'React[`use${"State"}`](0);',
+    'import * as R from "react"; R["use" + "State"](0);',
+  ]) {
+    assert.deepEqual(scanSource(source), [{ hook: 'useState', line: 1 }], source);
+  }
+  assert.deepEqual(scanSource('React[hookName](0);'), [
+    { hook: 'unresolved React member', line: 1 },
+  ]);
+  assert.deepEqual(scanSource('const hook = React[hookName];'), [
+    { hook: 'unresolved React member', line: 1 },
+  ]);
+  assert.deepEqual(scanSource('other[hookName](0);'), []);
+});
+
 test('ignores comments, ordinary strings, regexes, and longer identifiers', () => {
   const source = [
     '// useState()',
@@ -77,6 +94,8 @@ test('checks source, entries, app, packages, and a root entry point', () => {
     const fixtures = [
       ['src/panel.tsx', 'useState();'],
       ['src/escaped.tsx', String.raw`import * as React from 'react'; export function Panel() { return React.use\u0053tate(0)[0]; }`],
+      ['src/concat.tsx', 'React["use" + "State"](0);'],
+      ['src/template.tsx', 'React[`use${"State"}`](0);'],
       ['entries/desktop/main.tsx', 'useEffect();'],
       ['app/src/view.tsx', 'useRef();'],
       ['packages/plugins/view/src/index.tsx', 'useMemo();'],
@@ -90,9 +109,11 @@ test('checks source, entries, app, packages, and a root entry point', () => {
       writeFileSync(target, source);
     }
     const result = checkTree(root);
-    assert.equal(result.files, 6);
-    assert.equal(result.violations.length, 6);
+    assert.equal(result.files, 8);
+    assert.equal(result.violations.length, 8);
     assert.ok(result.violations.includes('src/escaped.tsx:1  uses useState'));
+    assert.ok(result.violations.includes('src/concat.tsx:1  uses useState'));
+    assert.ok(result.violations.includes('src/template.tsx:1  uses useState'));
     assert.ok(result.violations.some((v) => v === 'entries/desktop/main.tsx:1  uses useEffect'));
     assert.ok(result.violations.some((v) => v === 'packages/plugins/view/src/index.tsx:1  uses useMemo'));
 
@@ -102,6 +123,8 @@ test('checks source, entries, app, packages, and a root entry point', () => {
     assert.match(failed.stderr, /FAIL: React local state hooks/);
     assert.match(failed.stderr, /main\.tsx:1  uses useReducer/);
     assert.match(failed.stderr, /src\/escaped\.tsx:1  uses useState/);
+    assert.match(failed.stderr, /src\/concat\.tsx:1  uses useState/);
+    assert.match(failed.stderr, /src\/template\.tsx:1  uses useState/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
