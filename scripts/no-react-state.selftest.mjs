@@ -134,6 +134,82 @@ test('finds computed members through whitespace, comments, escapes, and template
   ]);
 });
 
+test('rejects string-named React hooks and newer state-owning hooks through scanner and CLI', () => {
+  const cases = [];
+  for (const hook of hooks) {
+    const escaped = `${hook.slice(0, 3)}\\u${hook.charCodeAt(3).toString(16).padStart(4, '0')}${hook.slice(4)}`;
+    for (const extension of ['js', 'tsx']) {
+      cases.push({ source: `import { "${hook}" as local } from "react"; local();`, hook, extension });
+      cases.push({ source: `import { "${escaped}" as local } from "react"; local();`, hook, extension });
+    }
+  }
+  for (const hook of ['useActionState', 'useOptimistic', 'useTransition']) {
+    cases.push({ source: `import { ${hook} as local } from "react"; local();`, hook, extension: 'tsx' });
+  }
+  assertCliCases(cases);
+});
+
+test('rejects alternate React namespace acquisition and global extraction', () => {
+  assertCliCases([
+    { source: 'import { default as R } from "react"; const h="useState"; R[h](0);', hook: 'unresolved React member', extension: 'tsx' },
+    { source: 'import { "default" as R } from "react"; R["useState"](0);', hook: 'useState', extension: 'tsx' },
+    { source: 'const R = await import(`react`); R["useState"](0);', hook: 'React runtime namespace access', extension: 'tsx' },
+    { source: 'const R = await import("re" + "act"); R["useState"](0);', hook: 'React runtime namespace access', extension: 'tsx' },
+    { source: 'const R = await import(moduleName);', hook: 'React runtime namespace access', extension: 'tsx' },
+    { source: 'const h="use"+"State"; const { [h]: state } = React; state(0);', hook: 'unresolved React member', extension: 'js' },
+    { source: 'const h="use"+"State"; const state=Reflect.get(React,h); state(0);', hook: 'React runtime namespace access', extension: 'js' },
+    { source: 'declare const React: typeof import("react"); const h="useState" as const; const { [h]: state }=React; state(0);', hook: 'unresolved React member', extension: 'tsx' },
+    { source: 'const React = require("react");', hook: 'React runtime namespace access', extension: 'js' },
+  ]);
+});
+
+test('permits type-only React names and unrelated runtime APIs through scanner and CLI', () => {
+  const cases = [];
+  for (const hook of [...hooks, 'useActionState', 'useOptimistic', 'useTransition']) {
+    cases.push({ source: `import type { ${hook} as Hook } from "react"; type T = typeof Hook;`, extension: 'tsx' });
+    cases.push({ source: `export type { ${hook} } from "react";`, extension: 'tsx' });
+  }
+  cases.push(
+    { source: 'import type { default as R } from "react"; type T = typeof R;', extension: 'tsx' },
+    { source: 'const o={useState:()=>1}; o["useState"]();', extension: 'tsx' },
+    { source: 'const require=()=>({}); require("react");', extension: 'js' },
+    { source: 'const React={useState:()=>1}; const h="useState"; const {[h]:state}=React; state();', extension: 'js' },
+    { source: 'const R=await import("unrelated-module");', extension: 'tsx' },
+    { source: 'import { Fragment } from "react"; export const x=Fragment;', extension: 'tsx' },
+    { source: 'import { useGrip } from "@owebeeone/grip-react"; export const x=useGrip;', extension: 'tsx' },
+  );
+  assertCliCases(cases, true);
+});
+
+function assertCliCases(cases, shouldPass = false) {
+  const root = mkdtempSync(join(tmpdir(), 'gvid-hook-cases-'));
+  try {
+    for (const [index, { source, hook, extension }] of cases.entries()) {
+      const path = `app/src/case-${index}.${extension}`;
+      const target = join(root, path);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, source);
+      const found = scanSource(source, target);
+      if (shouldPass) assert.deepEqual(found, [], source);
+      else assert.ok(found.some((violation) => violation.hook === hook), source);
+    }
+    const result = checkTree(root);
+    assert.equal(result.files, cases.length);
+    if (shouldPass) assert.deepEqual(result.violations, []);
+    else assert.equal(result.violations.length, cases.length);
+    const guard = fileURLToPath(new URL('./no-react-state.test.mjs', import.meta.url));
+    const run = spawnSync(process.execPath, [guard, '--root', root], { encoding: 'utf8' });
+    assert.equal(run.status, shouldPass ? 0 : 1, run.stderr);
+    for (const [index, { hook, extension }] of cases.entries()) {
+      const path = `app/src/case-${index}.${extension}:1`;
+      if (shouldPass) assert.doesNotMatch(run.stderr, new RegExp(path.replace('.', '\\.')));
+      else assert.ok(run.stderr.includes(`${path}  uses ${hook}`), run.stderr);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 test('checks source, entries, app, packages, and a root entry point', () => {
   const root = mkdtempSync(join(tmpdir(), 'gvid-hook-'));
   try {
@@ -176,7 +252,7 @@ test('checks source, entries, app, packages, and a root entry point', () => {
     const guard = fileURLToPath(new URL('./no-react-state.test.mjs', import.meta.url));
     const failed = spawnSync(process.execPath, [guard, '--root', root], { encoding: 'utf8' });
     assert.equal(failed.status, 1);
-    assert.match(failed.stderr, /FAIL: React local state hooks/);
+    assert.match(failed.stderr, /FAIL: React hooks and local state/);
     assert.match(failed.stderr, /main\.tsx:1  uses useReducer/);
     assert.match(failed.stderr, /src\/escaped\.tsx:1  uses useState/);
     assert.match(failed.stderr, /src\/concat\.tsx:1  uses useState/);
