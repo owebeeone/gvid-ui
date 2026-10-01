@@ -322,6 +322,9 @@ importers:
 
   packages/plugins/source:
     dependencies:
+      '@grythjs/desktop':
+        specifier: workspace:*
+        version: link:../../../../../gryth-wz/gryth-ui/packages/desktop
       '@grythjs/plugin-api':
         specifier: workspace:*
         version: link:../../../../../gryth-wz/gryth-ui/packages/plugin-api
