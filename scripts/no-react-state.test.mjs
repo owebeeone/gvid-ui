@@ -41,39 +41,90 @@ function scriptKind(fileName) {
 }
 
 export function scanSource(source, fileName = 'source.tsx') {
-  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, scriptKind(fileName));
+  const sourceName = resolve(fileName);
+  const options = { target: ts.ScriptTarget.Latest, noLib: true, noResolve: true, allowJs: true };
+  const file = ts.createSourceFile(sourceName, source, options.target, true, scriptKind(fileName));
+  const host = ts.createCompilerHost(options);
+  const sameFile = (name) => resolve(name).toLowerCase() === sourceName.toLowerCase();
+  host.getSourceFile = (name) => sameFile(name) ? file : undefined;
+  host.fileExists = sameFile;
+  host.readFile = (name) => sameFile(name) ? source : undefined;
+  const checker = ts.createProgram([sourceName], options, host).getTypeChecker();
   const violations = [];
-  const reactNamespaces = new Set(['React']);
+  const unsafeReactAccess = [];
   for (const statement of file.statements) {
-    if (!ts.isImportDeclaration(statement) || statement.moduleSpecifier.text !== 'react') continue;
-    const clause = statement.importClause;
-    if (clause?.name) reactNamespaces.add(clause.name.text);
-    if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
-      reactNamespaces.add(clause.namedBindings.name.text);
+    if (ts.isImportDeclaration(statement) && statement.moduleSpecifier.text === 'react') {
+      const clause = statement.importClause;
+      if (clause && !clause.isTypeOnly &&
+          (clause.name || (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings)))) {
+        unsafeReactAccess.push(statement);
+      }
     }
-  }
-  const aliases = new Map();
-  function collectAliases(node) {
-    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
-      aliases.set(node.name.text, node.initializer);
+    if (ts.isExportDeclaration(statement) && statement.moduleSpecifier?.text === 'react' &&
+        !statement.isTypeOnly &&
+        !(statement.exportClause && ts.isNamedExports(statement.exportClause) &&
+          statement.exportClause.elements.every((entry) => entry.isTypeOnly))) {
+      unsafeReactAccess.push(statement);
     }
-    ts.forEachChild(node, collectAliases);
+    if (ts.isImportEqualsDeclaration(statement) &&
+        ts.isExternalModuleReference(statement.moduleReference) &&
+        statement.moduleReference.expression?.text === 'react') unsafeReactAccess.push(statement);
   }
-  collectAliases(file);
   const unwrap = (node) => {
     while (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) ||
            ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node) ||
            ts.isNonNullExpression(node)) node = node.expression;
     return node;
   };
+  const importSource = (node) => {
+    for (let parent = node; parent; parent = parent.parent) {
+      if (ts.isImportDeclaration(parent)) return parent.moduleSpecifier.text;
+    }
+    return undefined;
+  };
+  const assignments = new Map();
+  function collectAssignments(node) {
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const left = unwrap(node.left);
+      if (ts.isIdentifier(left)) {
+        const symbol = checker.getSymbolAtLocation(left);
+        if (symbol) assignments.set(symbol, [...(assignments.get(symbol) ?? []), node.right]);
+      }
+    }
+    ts.forEachChild(node, collectAssignments);
+  }
+  collectAssignments(file);
   const isReactNamespace = (receiver, seen = new Set()) => {
     const node = unwrap(receiver);
     if (ts.isIdentifier(node)) {
-      if (reactNamespaces.has(node.text)) return true;
-      if (seen.has(node.text) || !aliases.has(node.text)) return false;
-      seen.add(node.text);
-      return isReactNamespace(aliases.get(node.text), seen);
+      const symbol = checker.getSymbolAtLocation(node);
+      if (!symbol) return node.text === 'React';
+      if (seen.has(symbol)) return false;
+      seen.add(symbol);
+      for (const declaration of symbol.declarations ?? []) {
+        if ((ts.isNamespaceImport(declaration) || ts.isImportClause(declaration)) &&
+            importSource(declaration) === 'react') return true;
+        if ((ts.isVariableDeclaration(declaration) || ts.isParameter(declaration)) &&
+            declaration.initializer && isReactNamespace(declaration.initializer, new Set(seen))) return true;
+      }
+      return (assignments.get(symbol) ?? []).some((value) =>
+        isReactNamespace(value, new Set(seen)));
     }
+    if (ts.isConditionalExpression(node)) {
+      return isReactNamespace(node.whenTrue, new Set(seen)) ||
+        isReactNamespace(node.whenFalse, new Set(seen));
+    }
+    if (ts.isBinaryExpression(node) &&
+        [ts.SyntaxKind.BarBarToken, ts.SyntaxKind.AmpersandAmpersandToken,
+          ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.CommaToken]
+          .includes(node.operatorToken.kind)) {
+      return isReactNamespace(node.left, new Set(seen)) ||
+        isReactNamespace(node.right, new Set(seen));
+    }
+    if (ts.isPropertyAccessExpression(node) && node.name.text === 'React' &&
+        ts.isIdentifier(node.expression) &&
+        ['globalThis', 'window', 'self'].includes(node.expression.text) &&
+        !checker.getSymbolAtLocation(node.expression)) return true;
     return ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
       node.expression.text === 'require' && node.arguments.length === 1 &&
       ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === 'react';
@@ -107,6 +158,10 @@ export function scanSource(source, fileName = 'source.tsx') {
 
   function visit(node) {
     if (ts.isIdentifier(node)) record(node.text, node);
+    if (ts.isCallExpression(node) && node.arguments.length === 1 &&
+        ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === 'react' &&
+        ((ts.isIdentifier(node.expression) && node.expression.text === 'require') ||
+         node.expression.kind === ts.SyntaxKind.ImportKeyword)) unsafeReactAccess.push(node);
     if (ts.isElementAccessExpression(node)) {
       const name = staticName(node.argumentExpression);
       record(name, node);
@@ -120,6 +175,12 @@ export function scanSource(source, fileName = 'source.tsx') {
   }
 
   visit(file);
+  if (!violations.length && unsafeReactAccess.length) {
+    for (const node of unsafeReactAccess) {
+      const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+      violations.push({ hook: 'React runtime namespace access', line });
+    }
+  }
   return violations;
 }
 

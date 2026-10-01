@@ -69,6 +69,40 @@ test('rejects wrapped and locally aliased React namespace receivers', () => {
   assert.deepEqual(scanSource('const hookName="safe"; const other={}; other[hookName](0);'), []);
 });
 
+test('resolves React aliases by lexical symbol rather than file-wide spelling', () => {
+  const shadowed = [
+    'import * as React from "react";',
+    'const R = React;',
+    'const hookName = "useState";',
+    'function Panel() { return R[hookName](0)[0]; }',
+    'function unrelated() { const R = {}; return R[hookName](0); }',
+  ].join('\n');
+  assert.deepEqual(scanSource(shadowed), [{ hook: 'unresolved React member', line: 4 }]);
+
+  const localReact = [
+    'import { Fragment as React } from "react";',
+    'const hookName = "safe";',
+    'function Panel() { const React = {}; return React[hookName](0); }',
+  ].join('\n');
+  assert.deepEqual(scanSource(localReact), []);
+});
+
+test('fails closed on runtime React namespace entry points but permits type-only imports', () => {
+  for (const source of [
+    'import * as React from "react";',
+    'import React from "react";',
+    'const React = require("react");',
+    'const React = import("react");',
+    'export * from "react";',
+  ]) {
+    assert.deepEqual(scanSource(source), [{ hook: 'React runtime namespace access', line: 1 }], source);
+  }
+  assert.deepEqual(scanSource('import type * as React from "react";'), []);
+  assert.deepEqual(scanSource('import { type ReactElement } from "react";'), []);
+  assert.deepEqual(scanSource('export { type ReactElement } from "react";'), []);
+  assert.deepEqual(scanSource('import { Fragment as React } from "react";'), []);
+});
+
 test('ignores comments, ordinary strings, regexes, and longer identifiers', () => {
   const source = [
     '// useState()',
@@ -110,6 +144,9 @@ test('checks source, entries, app, packages, and a root entry point', () => {
       ['src/template.tsx', 'React[`use${"State"}`](0);'],
       ['src/wrapped.tsx', 'import * as React from "react"; const hookName="useState"; function Panel() { return (React)[hookName](0)[0]; }'],
       ['src/alias.tsx', 'import * as React from "react"; const hookName="useState"; function Panel() { const R=React; return R[hookName](0)[0]; }'],
+      ['src/shadowed.tsx', 'import * as React from "react"; const R=React; const hookName="useState"; function Panel() { return R[hookName](0)[0]; } function unrelated() { const R={}; }'],
+      ['src/local-react.tsx', 'import { Fragment as React } from "react"; const hookName="safe"; function Panel() { const React={}; return React[hookName](0); }'],
+      ['src/runtime-react.tsx', 'import * as React from "react";'],
       ['entries/desktop/main.tsx', 'useEffect();'],
       ['app/src/view.tsx', 'useRef();'],
       ['packages/plugins/view/src/index.tsx', 'useMemo();'],
@@ -123,13 +160,16 @@ test('checks source, entries, app, packages, and a root entry point', () => {
       writeFileSync(target, source);
     }
     const result = checkTree(root);
-    assert.equal(result.files, 10);
-    assert.equal(result.violations.length, 10);
+    assert.equal(result.files, 13);
+    assert.equal(result.violations.length, 12);
     assert.ok(result.violations.includes('src/escaped.tsx:1  uses useState'));
     assert.ok(result.violations.includes('src/concat.tsx:1  uses useState'));
     assert.ok(result.violations.includes('src/template.tsx:1  uses useState'));
     assert.ok(result.violations.includes('src/wrapped.tsx:1  uses unresolved React member'));
     assert.ok(result.violations.includes('src/alias.tsx:1  uses unresolved React member'));
+    assert.ok(result.violations.includes('src/shadowed.tsx:1  uses unresolved React member'));
+    assert.ok(result.violations.includes('src/runtime-react.tsx:1  uses React runtime namespace access'));
+    assert.ok(!result.violations.some((v) => v.startsWith('src/local-react.tsx:')));
     assert.ok(result.violations.some((v) => v === 'entries/desktop/main.tsx:1  uses useEffect'));
     assert.ok(result.violations.some((v) => v === 'packages/plugins/view/src/index.tsx:1  uses useMemo'));
 
@@ -143,6 +183,9 @@ test('checks source, entries, app, packages, and a root entry point', () => {
     assert.match(failed.stderr, /src\/template\.tsx:1  uses useState/);
     assert.match(failed.stderr, /src\/wrapped\.tsx:1  uses unresolved React member/);
     assert.match(failed.stderr, /src\/alias\.tsx:1  uses unresolved React member/);
+    assert.match(failed.stderr, /src\/shadowed\.tsx:1  uses unresolved React member/);
+    assert.match(failed.stderr, /src\/runtime-react\.tsx:1  uses React runtime namespace access/);
+    assert.doesNotMatch(failed.stderr, /src\/local-react\.tsx:/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
