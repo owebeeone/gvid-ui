@@ -29,7 +29,7 @@ const clip: SequenceClip = {
 function sourceKey(sourceFrame = 12, overrides: Partial<SourceFrameKey> = {}): SourceFrameKey {
   return {
     requestId: 'request-a', cancelGroupId: 'group-a', viewerId: 'viewer-a',
-    sessionId: 'session-a', projectId: 'mock-a', assetId: asset.id,
+    sessionId: 'session-a', projectId: 'mock-a', revision: 1, assetId: asset.id,
     assetVersion: asset.version, fingerprint: asset.fingerprint, streamId: asset.streamId,
     sourceFrame, sourcePts: { num: sourceFrame, den: 24 }, ...overrides,
   };
@@ -94,7 +94,7 @@ describe('createMockFrameProvider', () => {
     }
     for (const overrides of [
       { assetVersion: 'v2' }, { fingerprint: 'other' }, { streamId: 'other' },
-      { projectId: '' }, { sourcePts: { num: 13, den: 24 } },
+      { projectId: '' }, { revision: -1 }, { sourcePts: { num: 13, den: 24 } },
     ]) {
       const result = await provider.source(sourceKey(12, overrides), asset, signal);
       expect(result).toMatchObject({ state: 'failed', diagnostic: { code: 'invalid-context' } });

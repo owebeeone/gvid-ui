@@ -220,7 +220,7 @@ export class TimelineTabTap extends BaseTap {
     if (this.frame === null || this.playing || marks.validity === 'invalid' || duration <= 0) return;
     const start = marks.validity === 'valid' ? marks.inFrame! : 0;
     const end = marks.validity === 'valid' ? marks.outFrame! : duration;
-    if (this.frame < start || this.frame >= end - 1) this.frame = start;
+    if (this.frame < start || this.frame >= end) this.frame = start;
     this.playing = true;
     const rate = this.sequence?.frameRate;
     const interval = rate && rate.num > 0 && rate.den > 0 ? 1000 * rate.den / rate.num : 1000 / 24;
@@ -244,7 +244,7 @@ export class TimelineTabTap extends BaseTap {
   private setMark(which: 'in' | 'out'): void {
     if (!this.live || this.frame === null || !this.sequence) return;
     if (which === 'in') this.inFrame = this.frame;
-    else this.outFrame = this.frame;
+    else this.outFrame = this.frame + 1;
     const marks = markState(this.inFrame, this.outFrame, this.sequence.durationFrames);
     if (marks.validity === 'invalid' || this.playing) this.stopClock();
     this.produce();

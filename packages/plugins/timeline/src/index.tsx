@@ -95,7 +95,7 @@ export function Timeline({ tabId }: { tabId: string }) {
         </div>
         <div className="gvid-timeline-group" aria-label="Playback marks">
           <button type="button" disabled={currentFrame === null || !marksControl} onClick={() => marksControl?.setIn()}>Set In</button>
-          <button type="button" disabled={currentFrame === null || !marksControl} onClick={() => marksControl?.setOut()}>Set Out</button>
+          <button type="button" title="Set Out after current frame" disabled={currentFrame === null || !marksControl} onClick={() => marksControl?.setOut()}>Set Out</button>
           <button type="button" disabled={!marksControl || marks?.validity === 'unset'} onClick={() => marksControl?.clear()}>Clear</button>
           <span className={'gvid-timeline-marks ' + (marks?.validity ?? 'unset')} role="status" title={marks?.reason}>
             In {marks?.inFrame ?? '-'} / Out {marks?.outFrame ?? '-'} | {marks?.validity ?? 'unset'}

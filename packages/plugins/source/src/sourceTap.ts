@@ -220,6 +220,7 @@ export class SourceTabTap extends BaseTap implements TransportControl, MarksCont
   private sync(): void {
     if (this.detached) return;
     const previousScope = this.scope;
+    const previousRevision = this.project?.revision;
     const { destination, asset, seed } = this.resolve();
     const nextScope = this.identity(destination, asset);
     const scopeChanged = nextScope !== previousScope;
@@ -242,6 +243,14 @@ export class SourceTabTap extends BaseTap implements TransportControl, MarksCont
       this.message = undefined;
       this.commandGeneration++;
       this.seedStamp = '';
+    } else if (previousRevision !== undefined && this.project?.revision !== previousRevision) {
+      this.groupCounter++;
+      this.cancelRequest();
+      this.releaseDisplayed();
+      this.result = null;
+      this.presentation = { state: 'empty', requestedFrame: null };
+      this.requestCore = '';
+      this.requestedProvider = undefined;
     }
     const binding = this.read(GVID_BINDING_VIEW);
     const nextBinding = binding ? `${binding.bindingSetId}:${binding.revision}` : '';
@@ -304,7 +313,7 @@ export class SourceTabTap extends BaseTap implements TransportControl, MarksCont
       return;
     }
     const core = JSON.stringify([
-      this.scope, this.frame, pts.num, pts.den,
+      this.scope, project.revision, this.frame, pts.num, pts.den,
     ]);
     if (!force && core === this.requestCore && this.provider === this.requestedProvider) return;
     this.cancelRequest();
@@ -314,6 +323,7 @@ export class SourceTabTap extends BaseTap implements TransportControl, MarksCont
       requestId: `${this.tabId}:r${++this.requestCounter}`,
       cancelGroupId: `${this.tabId}:g${this.groupCounter}`,
       viewerId: this.tabId, sessionId: project.sessionId, projectId: project.projectId!,
+      revision: project.revision,
       assetId: asset.id, assetVersion: asset.version, fingerprint: asset.fingerprint,
       streamId: asset.streamId, sourceFrame: this.frame, sourcePts: pts,
     };
@@ -343,10 +353,13 @@ export class SourceTabTap extends BaseTap implements TransportControl, MarksCont
 
   private receive(key: SourceFrameKey, provider: FrameProvider, result: FrameResult<SourceFrameKey>): void {
     const current = this.active?.key;
+    const project = this.read(GVID_PROJECT_VIEW);
     if (this.detached || !current || !sameKey(current, key) ||
       this.active?.abort.signal.aborted ||
       this.provider !== provider || this.destination.mode === 'unresolved' ||
       this.destination.projectId !== key.projectId || this.destination.sessionId !== key.sessionId ||
+      project?.status !== 'ready' || project.projectId !== key.projectId ||
+      project.sessionId !== key.sessionId || project.revision !== key.revision ||
       this.destination.assetId !== key.assetId || this.asset?.version !== key.assetVersion ||
       this.asset.fingerprint !== key.fingerprint || this.asset.streamId !== key.streamId ||
       this.frame !== key.sourceFrame) {

@@ -33,14 +33,16 @@ function deferred<T>() {
 
 function harness(sourceLink: DesktopTabLinkInfo = {
   tabId: 'source', toolId: GVID_TOOLS.source, params: {}, sourceTabId: 'assets',
-}, wireAtStart = true) {
+}, wireAtStart = true, initialRevision = project.revision) {
   const grok = new Grok(new GripRegistry());
   const links = createAtomValueTap(DESKTOP_TAB_LINKS, { initial: [
     { tabId: 'assets', toolId: GVID_TOOLS.assets },
     { tabId: 'timeline', toolId: GVID_TOOLS.timeline },
     sourceLink,
   ] });
-  const projectTap = createAtomValueTap(GVID_PROJECT_VIEW, { initial: project });
+  const projectTap = createAtomValueTap(GVID_PROJECT_VIEW, {
+    initial: { ...project, revision: initialRevision },
+  });
   const catalog = createAtomValueTap(GVID_ASSET_CATALOG, { initial: [lighthouse, workshop] });
   const binding = createAtomValueTap(GVID_BINDING_VIEW, {
     initial: { bindingSetId: 'bindings-a', revision: 2, byAssetId: {} },
@@ -48,7 +50,7 @@ function harness(sourceLink: DesktopTabLinkInfo = {
   const change = createAtomValueTap(GVID_CHANGE_STATUS, { initial: { state: 'live' as const } });
   const target = createAtomValueTap(GVID_ACTIVE_INSERT_TARGET, { initial: null });
   const sequence = createAtomValueTap(GVID_SEQUENCE_VIEW, { initial: {
-    id: 'main', graphId: 'graph-a', revision: 4, frameRate: { num: 24, den: 1 },
+    id: 'main', graphId: 'graph-a', revision: initialRevision, frameRate: { num: 24, den: 1 },
     durationFrames: 96, tracks: [{ id: 'v1', label: 'Video', kind: 'video' as const, locked: false, clips: [] }],
   } });
   const insert = vi.fn(async () => ({
@@ -131,6 +133,7 @@ describe('SourceTabTap', () => {
     expect(h.requests).toHaveLength(1);
     expect(h.requests[0].key).toMatchObject({
       viewerId: 'source', projectId: 'mock-a', sessionId: 'session-a',
+      revision: 4,
       assetId: 'lighthouse', assetVersion: 'v1', fingerprint: 'light-1',
       streamId: 'video', sourceFrame: 0, sourcePts: { num: 0, den: 1 },
     });
@@ -167,6 +170,65 @@ describe('SourceTabTap', () => {
     h.close();
     await replyReady(h, 3, 'closed-lease');
     expect(h.release).toHaveBeenCalledWith('closed-lease');
+  });
+
+  it('releases pending revision-1 replies across Insert and Undo at the same cursor', async () => {
+    const h = harness(undefined, true, 1);
+    h.tap.setIn();
+    h.tap.setOut();
+    const marks = h.read(GVID_SOURCE_MARKS);
+    expect(h.requests[0].key).toMatchObject({ revision: 1, sourceFrame: 0 });
+
+    h.projectTap.set({ ...project, revision: 2 });
+    h.grok.flush();
+    expect(h.requests[0].signal.aborted).toBe(true);
+    expect(h.requests[1].key).toMatchObject({ revision: 2, sourceFrame: 0 });
+    expect(h.requests[1].key.cancelGroupId).not.toBe(h.requests[0].key.cancelGroupId);
+    expect(h.read(GVID_SOURCE_MARKS)).toEqual(marks);
+    await replyReady(h, 0, 'late-insert');
+    expect(h.release).toHaveBeenCalledWith('late-insert');
+    expect(h.read(GVID_SOURCE_PRESENTATION)).toMatchObject({ state: 'pending', key: { revision: 2 } });
+
+    h.projectTap.set({ ...project, revision: 3 });
+    h.grok.flush();
+    expect(h.requests[1].signal.aborted).toBe(true);
+    expect(h.requests[2].key).toMatchObject({ revision: 3, sourceFrame: 0 });
+    expect(h.read(GVID_SOURCE_MARKS)).toEqual(marks);
+    await replyReady(h, 1, 'late-undo');
+    expect(h.release).toHaveBeenCalledWith('late-undo');
+    expect(h.read(GVID_SOURCE_PRESENTATION)).toMatchObject({ state: 'pending', key: { revision: 3 } });
+    await replyReady(h, 2, 'current-undo');
+    expect(h.read(GVID_SOURCE_PRESENTATION)).toMatchObject({ state: 'current', key: { revision: 3 } });
+    expect(h.read(GVID_SOURCE_FRAME_RESULT)).toMatchObject({ state: 'ready', key: { revision: 3 } });
+    h.close();
+  });
+
+  it('releases already-current revision-1 frames across Insert and Undo', async () => {
+    const h = harness(undefined, true, 1);
+    h.tap.setIn();
+    h.tap.setOut();
+    const marks = h.read(GVID_SOURCE_MARKS);
+    await replyReady(h, 0, 'displayed-1');
+    expect(h.read(GVID_SOURCE_PRESENTATION)).toMatchObject({ state: 'current', key: { revision: 1 } });
+
+    h.projectTap.set({ ...project, revision: 2 });
+    h.grok.flush();
+    expect(h.release).toHaveBeenCalledWith('displayed-1');
+    expect(h.read(GVID_SOURCE_PRESENTATION)).toMatchObject({ state: 'pending', key: { revision: 2 } });
+    expect(h.read(GVID_SOURCE_PRESENTATION)?.resource).toBeUndefined();
+    expect(h.read(GVID_SOURCE_MARKS)).toEqual(marks);
+    await replyReady(h, 1, 'displayed-2');
+    expect(h.read(GVID_SOURCE_PRESENTATION)).toMatchObject({ state: 'current', key: { revision: 2 } });
+
+    h.projectTap.set({ ...project, revision: 3 });
+    h.grok.flush();
+    expect(h.release).toHaveBeenCalledWith('displayed-2');
+    expect(h.read(GVID_SOURCE_PRESENTATION)).toMatchObject({ state: 'pending', key: { revision: 3 } });
+    expect(h.read(GVID_SOURCE_PRESENTATION)?.resource).toBeUndefined();
+    expect(h.read(GVID_SOURCE_MARKS)).toEqual(marks);
+    await replyReady(h, 2, 'displayed-3');
+    expect(h.read(GVID_SOURCE_PRESENTATION)).toMatchObject({ state: 'current', key: { revision: 3 } });
+    h.close();
   });
 
   it('uses standalone link params and rejects missing or invalid wire parents and frames', () => {

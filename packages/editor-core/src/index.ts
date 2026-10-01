@@ -4,11 +4,11 @@ import {
   GVID_ACTIVE_INSERT_TARGET, GVID_ACTIVE_INSERT_TARGET_CONTROL, GVID_ASSET_CATALOG,
   GVID_BINDING_VIEW, GVID_CHANGE_STATUS, GVID_DEST_PROJECT_ID, GVID_EDIT_COMMAND,
   GVID_EDIT_RESULT, GVID_GRAPH_VIEW, GVID_HISTORY_CONTROL, GVID_HISTORY_VIEW,
-  GVID_PROJECT_CONTROL, GVID_PROJECT_VIEW, GVID_SEQUENCE_VIEW,
+  GVID_PROJECT_CONTROL, GVID_PROJECT_VIEW, GVID_SEQUENCE_VIEW, GVID_TOOLS,
   type AssetRecord, type BindingView, type ChangeStatus, type EditorControl,
-  type EditorResult, type GraphView, type HistoryControl, type HistoryView,
+  type ChangeFootprint, type EditorResult, type GraphView, type HistoryControl, type HistoryView,
   type InsertSourceSpan, type InsertTarget, type InsertTargetControl, type ProjectControl,
-  type ProjectView, type SequenceClip, type SequenceView,
+  type ProjectTransitionResult, type ProjectView, type SequenceClip, type SequenceView,
 } from '@gvidjs/contracts';
 
 const RATE = Object.freeze({ num: 24, den: 1 });
@@ -16,7 +16,7 @@ const EMPTY_SEQUENCE: SequenceView = Object.freeze({
   id: '', graphId: '', revision: 0, frameRate: RATE, durationFrames: 0, tracks: Object.freeze([]),
 });
 
-interface JournalEntry { before: SequenceView; after: SequenceView; label: string }
+interface JournalEntry { before: SequenceView; after: SequenceView; fromFrame: number; label: string }
 interface State {
   project: ProjectView;
   graph: GraphView;
@@ -171,7 +171,8 @@ class MockEditorRootTap extends BaseTap {
   private clipSerial = 0;
   private knownLinks: readonly TabLinkInfo[] | null = null;
   private readonly projectControl: ProjectControl = {
-    open: (id) => this.open(id), close: () => this.close(),
+    open: (id, options) => this.open(id, options?.discardSessionEdits === true),
+    close: (options) => this.close(options?.discardSessionEdits === true),
   };
   private readonly targetControl: InsertTargetControl = {
     set: (target) => this.setTarget(target), clear: (owner) => this.clearTarget(owner),
@@ -192,9 +193,7 @@ class MockEditorRootTap extends BaseTap {
   }
 
   produceOnParams(): void {
-    const links = this.currentLinks();
-    if (this.state.target && links &&
-        !links.some((link) => link.tabId === this.state.target?.ownerTabId)) {
+    if (this.state.target && !this.isTimelineOwner(this.state.target.ownerTabId)) {
       this.clearTarget(this.state.target.ownerTabId);
     }
   }
@@ -205,6 +204,11 @@ class MockEditorRootTap extends BaseTap {
     const links = this.paramDrips.get(DESKTOP_TAB_LINKS)?.get() as TabLinkInfo[] | undefined;
     if (links && (links.length > 0 || this.knownLinks !== null)) this.knownLinks = links;
     return this.knownLinks;
+  }
+
+  private isTimelineOwner(tabId: string): boolean {
+    return this.currentLinks()?.some((link) =>
+      link.tabId === tabId && link.toolId === GVID_TOOLS.timeline) ?? false;
   }
 
   produce(opts?: { destContext?: GripContext }): void {
@@ -229,22 +233,32 @@ class MockEditorRootTap extends BaseTap {
 
   private commit(next: State): void { this.state = next; this.produce(); }
 
-  private open(id: string): void {
+  private open(id: string, discardSessionEdits: boolean): ProjectTransitionResult {
     if (id !== 'mock-a' && id !== 'mock-b') throw new RangeError(`Unknown mock project: ${id}`);
+    if (this.state.journal.length > 0 && !discardSessionEdits) {
+      return { status: 'confirmation-required', message: 'Opening a project will discard session-only edits.' };
+    }
     this.clipSerial = 0;
     this.commit(initialState(id));
+    return { status: 'opened', message: `Opened ${id}; session only.` };
   }
-  private close(): void { this.clipSerial = 0; this.commit(closedState()); }
+  private close(discardSessionEdits: boolean): ProjectTransitionResult {
+    if (this.state.journal.length > 0 && !discardSessionEdits) {
+      return { status: 'confirmation-required', message: 'Closing the project will discard session-only edits.' };
+    }
+    this.clipSerial = 0;
+    this.commit(closedState());
+    return { status: 'closed', message: 'Project closed.' };
+  }
 
   private validTarget(target: InsertTarget): boolean {
     const { project, graph } = this.state;
     const track = graph.sequence.tracks.find((item) => item.id === target.trackId);
-    const links = this.currentLinks();
     return project.status === 'ready' && this.state.change.state === 'live' &&
       target.projectId === project.projectId && target.graphId === graph.graphId &&
       target.sequenceId === graph.sequence.id && Boolean(target.ownerTabId) &&
       Boolean(track && !track.locked && track.kind === 'video') &&
-      (links === null || links.some((link) => link.tabId === target.ownerTabId)) &&
+      this.isTimelineOwner(target.ownerTabId) &&
       isFrame(target.frame) && target.frame <= graph.sequence.durationFrames;
   }
   private setTarget(target: InsertTarget): void {
@@ -256,19 +270,26 @@ class MockEditorRootTap extends BaseTap {
     }
   }
 
-  private makeResult(status: EditorResult['status'], message: string, revision = this.state.graph.revision): EditorResult {
+  private makeResult(status: EditorResult['status'], message: string,
+    revision = this.state.graph.revision, footprint?: ChangeFootprint): EditorResult {
     this.commandSerial += 1;
-    return Object.freeze({ status, revision, message, commandId: `mock-command-${this.commandSerial}` });
+    return Object.freeze({ status, revision, message, commandId: `mock-command-${this.commandSerial}`,
+      ...(footprint ? { footprint } : {}) });
   }
   private reject(message: string): Promise<EditorResult> {
     const result = this.makeResult('rejected', message);
     this.commit({ ...this.state, result });
     return Promise.resolve(result);
   }
-  private accept(seq: SequenceView, journal: readonly JournalEntry[], cursor: number, message: string): Promise<EditorResult> {
+  private accept(seq: SequenceView, journal: readonly JournalEntry[], cursor: number,
+    fromFrame: number, message: string): Promise<EditorResult> {
     const revision = this.state.graph.revision + 1;
     const accepted = Object.freeze({ ...seq, revision });
-    const result = this.makeResult('accepted-session-only', message, revision);
+    const footprint: ChangeFootprint = Object.freeze({
+      graphId: this.state.graph.graphId, sequenceId: accepted.id, revision,
+      fromFrame, toFrameExclusive: Math.max(this.state.graph.sequence.durationFrames, accepted.durationFrames),
+    });
+    const result = this.makeResult('accepted-session-only', message, revision, footprint);
     const project = Object.freeze({ ...this.state.project, revision });
     const graph = Object.freeze({ graphId: this.state.graph.graphId, revision, sequence: accepted });
     const target = this.state.target && this.state.target.frame <= accepted.durationFrames ? this.state.target : null;
@@ -300,9 +321,10 @@ class MockEditorRootTap extends BaseTap {
       intent.sourceIn, intent.sourceOut, `insert-${serial}`, `split-${serial}`);
     if (!next || !validateSequence(next, assets)) return this.reject('Insert would create an invalid or locked track.');
     this.clipSerial = serial;
-    const entry: JournalEntry = Object.freeze({ before: graph.sequence, after: next, label: 'Insert source span' });
+    const entry: JournalEntry = Object.freeze({ before: graph.sequence, after: next,
+      fromFrame: target.frame, label: 'Insert source span' });
     const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
-    return this.accept(next, journal, journal.length,
+    return this.accept(next, journal, journal.length, target.frame,
       `Inserted ${intent.sourceOut - intent.sourceIn} frames at ${target.frame}; session only.`);
   }
 
@@ -314,7 +336,7 @@ class MockEditorRootTap extends BaseTap {
     const entry = journal[direction === 'undo' ? cursor - 1 : cursor];
     const next = direction === 'undo' ? entry.before : entry.after;
     if (!validateSequence(next, this.state.assets)) return this.reject('History state is invalid.');
-    return this.accept(next, journal, cursor + (direction === 'undo' ? -1 : 1),
+    return this.accept(next, journal, cursor + (direction === 'undo' ? -1 : 1), entry.fromFrame,
       `${direction === 'undo' ? 'Undid' : 'Redid'} ${entry.label.toLowerCase()}; session only.`);
   }
 }

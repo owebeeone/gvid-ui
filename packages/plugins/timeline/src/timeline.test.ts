@@ -21,11 +21,11 @@ const project: ProjectView = {
   bindingSetId: 'bindings-a', bindingRevision: 1, sessionOnly: true, status: 'ready',
 };
 
-function setup() {
+function setup(initialSequence: SequenceView = sequence) {
   const grok = new Grok(new GripRegistry());
   const projectTap = createAtomValueTap(GVID_PROJECT_VIEW, { initial: project });
-  const graphTap = createAtomValueTap(GVID_GRAPH_VIEW, { initial: { graphId: 'graph-a', revision: 1, sequence } });
-  const sequenceTap = createAtomValueTap(GVID_SEQUENCE_VIEW, { initial: sequence });
+  const graphTap = createAtomValueTap(GVID_GRAPH_VIEW, { initial: { graphId: 'graph-a', revision: 1, sequence: initialSequence } });
+  const sequenceTap = createAtomValueTap(GVID_SEQUENCE_VIEW, { initial: initialSequence });
   const statusTap = createAtomValueTap(GVID_CHANGE_STATUS, { initial: { state: 'live' } as ChangeStatus });
   for (const tap of [projectTap, graphTap, sequenceTap, statusTap]) grok.registerTap(tap);
   const context = grok.mainPresentationContext.getOrCreateMatchingContext('tab:timeline-test');
@@ -48,6 +48,7 @@ describe('timeline tab transport', () => {
     expect(boundedFrame(8, 8)).toBeNull();
     expect(markState(null, null, 8).validity).toBe('unset');
     expect(markState(2, null, 8).validity).toBe('pending');
+    expect(markState(null, 1, 8).validity).toBe('pending');
     expect(markState(2, 8, 8).validity).toBe('valid');
     expect(markState(2, 2, 8).validity).toBe('invalid');
     expect(markState(2, 9, 8).validity).toBe('invalid');
@@ -60,15 +61,81 @@ describe('timeline tab transport', () => {
     tap.transportControl.seek(2);
     tap.marksControl.setIn();
     expect(read(GVID_TIMELINE_MARKS)?.validity).toBe('pending');
-    tap.transportControl.seek(6);
+    tap.transportControl.seek(5);
     tap.marksControl.setOut();
     expect(read(GVID_TIMELINE_MARKS)).toMatchObject({ inFrame: 2, outFrame: 6, validity: 'valid' });
-    tap.transportControl.seek(7);
+    tap.transportControl.seek(6);
     tap.transportControl.play();
     expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(2);
     vi.advanceTimersByTime(250);
     expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(5);
     expect(read(GVID_TIMELINE_TRANSPORT)?.playing).toBe(false);
+    tap.transportControl.seek(0);
+    tap.transportControl.play();
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(2);
+    tap.transportControl.pause();
+  });
+
+  it('keeps Out - 1 on Play and pauses on the next tick', () => {
+    vi.useFakeTimers();
+    const { tap, read } = setup();
+    tap.transportControl.seek(2);
+    tap.marksControl.setIn();
+    tap.transportControl.seek(5);
+    tap.marksControl.setOut();
+    tap.transportControl.play();
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(5);
+    expect(read(GVID_TIMELINE_TRANSPORT)?.playing).toBe(true);
+    vi.advanceTimersByTime(42);
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(5);
+    expect(read(GVID_TIMELINE_TRANSPORT)?.playing).toBe(false);
+  });
+
+  it('keeps the final unmarked frame until playback stops', () => {
+    vi.useFakeTimers();
+    const { tap, read } = setup();
+    tap.transportControl.seek(7);
+    tap.transportControl.play();
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(7);
+    vi.advanceTimersByTime(42);
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(7);
+    expect(read(GVID_TIMELINE_TRANSPORT)?.playing).toBe(false);
+  });
+
+  it('keeps an Out-only mark at frame zero pending without limiting playback', () => {
+    vi.useFakeTimers();
+    const { tap, read } = setup();
+    tap.marksControl.setOut();
+    expect(read(GVID_TIMELINE_MARKS)).toMatchObject({ inFrame: null, outFrame: 1, validity: 'pending' });
+    tap.transportControl.play();
+    vi.advanceTimersByTime(42);
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(1);
+    expect(read(GVID_TIMELINE_TRANSPORT)?.playing).toBe(true);
+    tap.transportControl.pause();
+  });
+
+  it('marks the sequence end as Out and never publishes that boundary as a frame', () => {
+    vi.useFakeTimers();
+    const { tap, read, context, grok } = setup({ ...sequence, durationFrames: 96 });
+    const frameDrip = context.getGripConsumerContext().getOrCreateConsumer(GVID_DEST_TIMELINE_FRAME);
+    const publishedFrames: Array<number | null | undefined> = [];
+    frameDrip.subscribe(() => publishedFrames.push(frameDrip.get()));
+    grok.flush();
+    tap.transportControl.seek(94);
+    tap.marksControl.setIn();
+    tap.transportControl.seek(95);
+    tap.marksControl.setOut();
+    expect(read(GVID_TIMELINE_MARKS)).toMatchObject({ inFrame: 94, outFrame: 96, validity: 'valid' });
+    tap.transportControl.seek(94);
+    tap.transportControl.play();
+    vi.advanceTimersByTime(42);
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(95);
+    expect(read(GVID_TIMELINE_TRANSPORT)?.playing).toBe(true);
+    vi.advanceTimersByTime(42);
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(95);
+    expect(read(GVID_TIMELINE_TRANSPORT)?.playing).toBe(false);
+    expect(publishedFrames).toContain(95);
+    expect(publishedFrames).not.toContain(96);
   });
 
   it('pauses on a revision gap and invalidates marks on a shorter accepted sequence', () => {

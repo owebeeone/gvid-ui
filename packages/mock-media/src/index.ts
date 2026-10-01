@@ -200,7 +200,8 @@ export function createMockFrameProvider(options: MockFrameProviderOptions = {}):
     source(key, asset, signal) {
       if (signal.aborted) return Promise.reject(abortError());
       if (!validId(key.requestId) || !validId(key.cancelGroupId) || !validId(key.viewerId) ||
-        !validId(key.projectId) || !validId(key.sessionId) || !validAsset(asset) ||
+        !validId(key.projectId) || !validId(key.sessionId) ||
+        !Number.isSafeInteger(key.revision) || key.revision < 0 || !validAsset(asset) ||
         key.assetId !== asset.id || key.assetVersion !== asset.version ||
         key.fingerprint !== asset.fingerprint || key.streamId !== asset.streamId) {
         return Promise.resolve(failed(key, 'invalid-context', 'Source request does not match the registered asset'));

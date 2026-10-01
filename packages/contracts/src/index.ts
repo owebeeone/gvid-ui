@@ -31,8 +31,13 @@ export interface ProjectView {
 }
 
 export interface ProjectControl {
-  open(projectId: string): void;
-  close(): void;
+  open(projectId: string, options?: { discardSessionEdits?: boolean }): ProjectTransitionResult;
+  close(options?: { discardSessionEdits?: boolean }): ProjectTransitionResult;
+}
+
+export interface ProjectTransitionResult {
+  status: 'opened' | 'closed' | 'confirmation-required';
+  message: string;
 }
 
 export interface AssetRecord {
@@ -111,6 +116,15 @@ export interface EditorResult {
   revision: number;
   message: string;
   commandId: string;
+  footprint?: ChangeFootprint;
+}
+
+export interface ChangeFootprint {
+  graphId: string;
+  sequenceId: string;
+  revision: number;
+  fromFrame: number;
+  toFrameExclusive: number;
 }
 
 export interface InsertSourceSpan {
@@ -225,6 +239,7 @@ export interface SourceFrameKey {
   viewerId: string;
   sessionId: string;
   projectId: string;
+  revision: number;
   assetId: string;
   assetVersion: string;
   fingerprint: string;

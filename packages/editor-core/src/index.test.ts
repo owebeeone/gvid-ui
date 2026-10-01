@@ -10,7 +10,7 @@ import {
 } from '@gvidjs/contracts';
 import { registerMockTaps } from './index';
 
-function setup(withLinks = false) {
+function setup(withLinks = true) {
   const grok = new Grok(registry);
   const links = createAtomValueTap(DESKTOP_TAB_LINKS, {
     initial: [{ tabId: 'timeline-1', toolId: 'gvid.timeline' }],
@@ -99,6 +99,10 @@ describe('mock editor root Grips', () => {
     expect(get(GVID_HISTORY_VIEW)).toMatchObject({ revision: 2, canUndo: true, canRedo: false });
     const result = await pending;
     expect(result).toMatchObject({ status: 'accepted-session-only', revision: 2 });
+    expect(result.footprint).toEqual({
+      graphId: 'mock-a/main', sequenceId: 'main', revision: 2,
+      fromFrame: 24, toFrameExclusive: 120,
+    });
     expect(get(GVID_EDIT_RESULT)).toBe(result);
     const clips = get(GVID_SEQUENCE_VIEW).tracks[0].clips;
     expect(ranges(clips)).toEqual([
@@ -116,7 +120,9 @@ describe('mock editor root Grips', () => {
     const { get, target, intent } = setup();
     const end = target(96);
     get(GVID_ACTIVE_INSERT_TARGET_CONTROL).set(end);
-    expect((await get(GVID_EDIT_COMMAND).insert(intent(end))).status).toBe('accepted-session-only');
+    const result = await get(GVID_EDIT_COMMAND).insert(intent(end));
+    expect(result.status).toBe('accepted-session-only');
+    expect(result.footprint).toMatchObject({ revision: 2, fromFrame: 96, toFrameExclusive: 120 });
     expect(ranges(get(GVID_SEQUENCE_VIEW).tracks[0].clips)).toEqual([
       ['lighthouse', 12, 60, 0, 48],
       ['workshop', 5, 53, 48, 96],
@@ -131,6 +137,7 @@ describe('mock editor root Grips', () => {
     const command = get(GVID_EDIT_COMMAND);
     const absent = await command.insert(intent(at24));
     expect(absent).toMatchObject({ status: 'rejected', revision: 1 });
+    expect(absent.footprint).toBeUndefined();
     get(GVID_ACTIVE_INSERT_TARGET_CONTROL).set(at24);
     const cases: Partial<InsertSourceSpan>[] = [
       { sessionId: 'old-session' }, { expectedRevision: 0 },
@@ -141,6 +148,7 @@ describe('mock editor root Grips', () => {
     for (const fields of cases) {
       const result = await command.insert(intent(at24, fields));
       expect(result.status).toBe('rejected');
+      expect(result.footprint).toBeUndefined();
       expect(result.message).not.toBe('');
       expect(get(GVID_GRAPH_VIEW)).toBe(original);
       expect(get(GVID_HISTORY_VIEW)).toMatchObject({ revision: 1, canUndo: false });
@@ -160,10 +168,10 @@ describe('mock editor root Grips', () => {
     const second = get(GVID_SEQUENCE_VIEW);
     expect(second.revision).toBe(3);
     expect(second.durationFrames).toBe(144);
-    expect((await history.undo()).revision).toBe(4);
+    expect((await history.undo()).footprint).toMatchObject({ revision: 4, fromFrame: 24, toFrameExclusive: 144 });
     expect(get(GVID_SEQUENCE_VIEW)).toMatchObject({ revision: 4, durationFrames: first.durationFrames });
     expect(get(GVID_HISTORY_VIEW)).toMatchObject({ revision: 4, canUndo: true, canRedo: true });
-    expect((await history.redo()).revision).toBe(5);
+    expect((await history.redo()).footprint).toMatchObject({ revision: 5, fromFrame: 24, toFrameExclusive: 144 });
     expect(get(GVID_SEQUENCE_VIEW)).toMatchObject({ revision: 5, durationFrames: second.durationFrames });
     expect((await history.undo()).revision).toBe(6);
     expect((await control.insert(intent(at24))).revision).toBe(7);
@@ -210,6 +218,61 @@ describe('mock editor root Grips', () => {
     expect(get(GVID_GRAPH_VIEW).revision).toBe(1);
   });
 
+  it('requires explicit acknowledgement before project controls discard accepted edits or redo history', async () => {
+    const { get, target, intent } = setup();
+    const projectControl = get(GVID_PROJECT_CONTROL);
+    const at24 = target(24);
+    get(GVID_ACTIVE_INSERT_TARGET_CONTROL).set(at24);
+    await get(GVID_EDIT_COMMAND).insert(intent(at24));
+    const acceptedProject = get(GVID_PROJECT_VIEW);
+    const acceptedGraph = get(GVID_GRAPH_VIEW);
+    const acceptedHistory = get(GVID_HISTORY_VIEW);
+    expect(projectControl.open('mock-a').status).toBe('confirmation-required');
+    expect(projectControl.open('mock-b').status).toBe('confirmation-required');
+    expect(projectControl.close().status).toBe('confirmation-required');
+    expect(get(GVID_PROJECT_VIEW)).toBe(acceptedProject);
+    expect(get(GVID_GRAPH_VIEW)).toBe(acceptedGraph);
+    expect(get(GVID_HISTORY_VIEW)).toEqual(acceptedHistory);
+    await get(GVID_HISTORY_CONTROL).undo();
+    const undone = get(GVID_GRAPH_VIEW);
+    expect(get(GVID_HISTORY_VIEW)).toMatchObject({ canUndo: false, canRedo: true });
+    expect(projectControl.close().status).toBe('confirmation-required');
+    expect(get(GVID_GRAPH_VIEW)).toBe(undone);
+    expect(projectControl.open('mock-b', { discardSessionEdits: true }).status).toBe('opened');
+    expect(get(GVID_PROJECT_VIEW)).toMatchObject({ projectId: 'mock-b', revision: 1 });
+    expect(get(GVID_HISTORY_VIEW)).toMatchObject({ canUndo: false, canRedo: false });
+    const nextTarget = target(96);
+    get(GVID_ACTIVE_INSERT_TARGET_CONTROL).set(nextTarget);
+    await get(GVID_EDIT_COMMAND).insert(intent(nextTarget, { assetId: 'studio-b' }));
+    expect(projectControl.close({ discardSessionEdits: true }).status).toBe('closed');
+    expect(get(GVID_PROJECT_VIEW).status).toBe('closed');
+  });
+
+  it('accepts insert targets only from a live timeline tab after links resolve', async () => {
+    const { grok, get, target, intent, links } = setup(false);
+    const control = get(GVID_ACTIVE_INSERT_TARGET_CONTROL);
+    const at24 = target(24);
+    control.set(at24);
+    expect(get(GVID_ACTIVE_INSERT_TARGET)).toBeNull();
+    grok.registerTap(links);
+    grok.flush();
+    links.set([{ tabId: 'source-1', toolId: 'gvid.source' }, { tabId: 'settings-1', toolId: 'settings' }]);
+    grok.flush();
+    for (const ownerTabId of ['source-1', 'settings-1', 'missing']) {
+      control.set({ ...at24, ownerTabId });
+      expect(get(GVID_ACTIVE_INSERT_TARGET)).toBeNull();
+      expect((await get(GVID_EDIT_COMMAND).insert(intent({ ...at24, ownerTabId }))).status).toBe('rejected');
+    }
+    links.set([{ tabId: 'timeline-1', toolId: 'gvid.timeline' }]);
+    grok.flush();
+    control.set(at24);
+    expect(get(GVID_ACTIVE_INSERT_TARGET)).toEqual(at24);
+    expect((await get(GVID_EDIT_COMMAND).insert(intent(at24))).status).toBe('accepted-session-only');
+    links.set([{ tabId: 'timeline-1', toolId: 'gvid.source' }]);
+    grok.flush();
+    expect(get(GVID_ACTIVE_INSERT_TARGET)).toBeNull();
+  });
+
   it('clears the active target when its desktop owner tab closes', () => {
     const { grok, get, target, links } = setup(true);
     const at24 = target(24);
@@ -225,7 +288,7 @@ describe('mock editor root Grips', () => {
   });
 
   it('observes desktop tab links registered after the mock root tap', () => {
-    const { grok, get, target, links } = setup();
+    const { grok, get, target, links } = setup(false);
     grok.registerTap(links);
     grok.flush();
     const at24 = target(24);
