@@ -1,0 +1,28 @@
+packages:
+  - app
+  - packages/*
+  - packages/plugins/*
+  - ../../gryth-wz/gryth-ui/packages/plugin-api
+  - ../../gryth-wz/gryth-ui/packages/desktop
+  - ../../gryth-wz/gryth-ui/packages/plugins/settings
+  - ../../gryth-wz/gryth-ui/packages/glade
+  - ../../gryth-wz/grip-core
+  - ../../gryth-wz/grip-react
+  - ../../gryth-wz/glial
+  - ../../gryth-wz/glade-decl-ts
+
+overrides:
+  "@grythjs/plugin-api": "workspace:*"
+  "@grythjs/desktop": "workspace:*"
+  "@grythjs/plugin-settings": "workspace:*"
+  "@grythjs/glade": "workspace:*"
+  "@owebeeone/grip-core": "workspace:*"
+  "@owebeeone/grip-react": "workspace:*"
+  "@owebeeone/glial-runtime": "workspace:*"
+  "@owebeeone/glade-decl": "workspace:*"
+
+onlyBuiltDependencies:
+  - esbuild
+
+allowBuilds:
+  esbuild: true
