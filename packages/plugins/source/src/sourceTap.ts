@@ -101,6 +101,7 @@ export class SourceTabTap extends BaseTap implements TransportControl, MarksCont
   private inFrame: number | null = null;
   private outFrame: number | null = null;
   private playing = false;
+  private shuttleRate = 0;
   private timer: ReturnType<typeof setInterval> | undefined;
   private scope = '';
   private bindingStamp = '';
@@ -292,6 +293,7 @@ export class SourceTabTap extends BaseTap implements TransportControl, MarksCont
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
     this.playing = false;
+    this.shuttleRate = 0;
   }
 
   private cancelRequest(): void {
@@ -423,6 +425,7 @@ export class SourceTabTap extends BaseTap implements TransportControl, MarksCont
     const asset = this.asset;
     return {
       frame: this.frame, frameCount: asset?.frameCount ?? 0, playing: this.playing,
+      shuttleRate: this.shuttleRate,
       rate: asset?.frameRate ?? { num: 0, den: 1 },
       disabledReason: this.destination.mode === 'unresolved' ? this.destination.reason :
         this.marks().validity === 'invalid' ? this.marks().reason : undefined,
@@ -516,26 +519,37 @@ export class SourceTabTap extends BaseTap implements TransportControl, MarksCont
   }
 
   play(): void {
-    if (this.playing || this.destination.mode === 'unresolved' || !this.asset ||
+    if (!this.playing) this.shuttle(1);
+  }
+
+  shuttle(direction: -1 | 0 | 1): void {
+    if (direction === 0) { this.pause(); return; }
+    if (this.destination.mode === 'unresolved' || !this.asset ||
       this.frame === null || this.marks().validity === 'invalid') return;
     const marks = this.marks();
-    if (marks.validity === 'valid' && marks.inFrame !== null && marks.outFrame !== null &&
-      (this.frame < marks.inFrame || this.frame >= marks.outFrame)) this.seekInternal(marks.inFrame);
+    const start = marks.validity === 'valid' ? marks.inFrame! : 0;
+    const end = marks.validity === 'valid' ? marks.outFrame! : this.asset.frameCount;
+    if (this.frame < start || this.frame >= end) this.seekInternal(direction > 0 ? start : end - 1);
     const period = 1000 * this.asset.frameRate.den / this.asset.frameRate.num;
     if (!Number.isFinite(period) || period <= 0) return;
-    this.playing = true;
-    this.timer = setInterval(() => {
-      if (!this.asset || this.frame === null || this.destination.mode === 'unresolved') {
-        this.pause();
-        return;
-      }
-      const limit = this.marks().validity === 'valid' ? this.outFrame! : this.asset.frameCount;
-      if (this.frame + 1 >= limit) {
-        this.pause();
-        return;
-      }
-      this.seekInternal(this.frame + 1);
-    }, period);
+    this.shuttleRate = this.playing && Math.sign(this.shuttleRate) === direction ?
+      direction * Math.min(4, Math.abs(this.shuttleRate) * 2) : direction;
+    if (!this.playing) {
+      this.playing = true;
+      this.timer = setInterval(() => {
+        if (!this.asset || this.frame === null || this.destination.mode === 'unresolved') {
+          this.pause();
+          return;
+        }
+        const currentMarks = this.marks();
+        if (currentMarks.validity === 'invalid') { this.pause(); return; }
+        const first = currentMarks.validity === 'valid' ? this.inFrame! : 0;
+        const last = currentMarks.validity === 'valid' ? this.outFrame! : this.asset.frameCount;
+        const next = this.frame + this.shuttleRate;
+        this.seekInternal(Math.max(first, Math.min(last - 1, next)));
+        if (next < first || next >= last) this.pause();
+      }, period);
+    }
     this.produce();
   }
 

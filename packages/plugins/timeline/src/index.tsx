@@ -13,7 +13,7 @@ import {
   GVID_TIMELINE_TRANSPORT_CONTROL, GVID_TIMELINE_VIEWPORT, GVID_TIMELINE_VIEWPORT_TAP,
   GVID_TOOLS, type SequenceTrack, type TimelineDropPreview,
 } from '@gvidjs/contracts';
-import { clipBoundaryFrame, frameFromTimelineX, projectDropPreview, TimelineTabTap } from './timeline';
+import { clipBoundaryFrame, frameFromTimelineX, projectDropPreview, snapTimelineFrame, TimelineTabTap } from './timeline';
 import './timeline.css';
 
 interface RulerGesture {
@@ -75,12 +75,18 @@ export function Timeline({ tabId }: { tabId: string }) {
   const currentFrame = transport?.frame ?? null;
   const pixelsPerFrame = viewport?.pixelsPerFrame ?? 8;
   const startFrame = viewport?.startFrame ?? 0;
+  const snapEnabled = viewport?.snapEnabled ?? true;
+  const snapAnchors = [currentFrame, marks?.inFrame, marks?.outFrame]
+    .filter((frame): frame is number => frame !== null && frame !== undefined);
   const previewEnd = preview ? preview.frame + preview.sourceOut - preview.sourceIn : 0;
   const span = Math.max(duration + 24, previewEnd + 24, 96);
   const width = span * pixelsPerFrame;
   const ticks = Array.from({ length: Math.ceil(span / (pixelsPerFrame >= 12 ? 12 : 24)) + 1 },
     (_, index) => index * (pixelsPerFrame >= 12 ? 12 : 24));
   const selectedTrack = tracks.find((track) => track.id === selection?.trackId) ?? tracks[0];
+  const selectedClip = selection?.trackId && selection.clipId ?
+    sequence?.tracks.find((track) => track.id === selection.trackId)
+      ?.clips.find((clip) => clip.id === selection.clipId) : null;
   const target = accepted && activeTarget?.ownerTabId === tabId && activeTarget.projectId === project?.projectId &&
     activeTarget.graphId === graph?.graphId && activeTarget.sequenceId === sequenceId ? activeTarget : null;
   const rangeStart = marks && marks.validity !== 'unset' && marks.validity !== 'invalid' ? marks.inFrame ?? 0 : null;
@@ -114,14 +120,25 @@ export function Timeline({ tabId }: { tabId: string }) {
       const asset = catalog.find((item) => item.id === dragging?.assetId);
       if (!dragging || !asset || !binding?.byAssetId[asset.id] ||
         dragging.projectId !== scope.projectId || dragging.sessionId !== scope.sessionId) return null;
-      const projection = projectDropPreview(sequence, track.id, pointerFrame,
+      const frame = snapEnabled ? snapTimelineFrame(sequence, pointerFrame, {
+        pixelsPerFrame, spanFrames: dragging.sourceOut - dragging.sourceIn, anchors: snapAnchors,
+      }) : pointerFrame;
+      const projection = projectDropPreview(sequence, track.id, frame,
         { kind: 'source', span: dragging, asset });
       return projection && { ...projection, ...scope, ownerTabId: tabId };
     }
     const moving = clipDragTap?.get();
     if (!moving || moving.projectId !== scope.projectId || moving.sessionId !== scope.sessionId ||
       moving.sequenceId !== scope.sequenceId || moving.expectedRevision !== scope.expectedRevision) return null;
-    const projection = projectDropPreview(sequence, track.id, pointerFrame, { kind: 'clip', moving });
+    const movingClip = sequence.tracks.find((row) => row.id === moving.sourceTrackId)
+      ?.clips.find((clip) => clip.id === moving.clipId);
+    const rawStart = Math.max(0, pointerFrame - moving.grabOffsetFrames);
+    const start = snapEnabled && movingClip ? snapTimelineFrame(sequence, rawStart, {
+      pixelsPerFrame, spanFrames: movingClip.timelineOut - movingClip.timelineIn,
+      anchors: snapAnchors, excludeClipId: movingClip.id,
+    }) : rawStart;
+    const projection = projectDropPreview(sequence, track.id, start + moving.grabOffsetFrames,
+      { kind: 'clip', moving });
     return projection && { ...projection, ...scope, ownerTabId: tabId };
   };
   const commitDrop = (projection: TimelineDropPreview | null) => {
@@ -161,7 +178,7 @@ export function Timeline({ tabId }: { tabId: string }) {
       trackId: track.id, frame, ownerTabId: tabId });
   };
   const changeZoom = (next: number) => viewportTap?.set({
-    startFrame, pixelsPerFrame: next, verticalScroll: viewport?.verticalScroll ?? 0,
+    startFrame, pixelsPerFrame: next, verticalScroll: viewport?.verticalScroll ?? 0, snapEnabled,
   });
   const dropGhost = preview && <span className="gvid-timeline-drop-ghost"
     style={{ left: preview.frame * pixelsPerFrame,
@@ -182,13 +199,74 @@ export function Timeline({ tabId }: { tabId: string }) {
         if (event.target instanceof HTMLElement &&
           (event.target.isContentEditable || event.target.closest('textarea, select, input:not([type="range"])'))) return;
         const key = event.key.toLowerCase();
+        const panelShortcutTarget = !(event.target instanceof Element &&
+          event.target.closest('button:not(.gvid-timeline-clip-body), input, select, textarea, a, [contenteditable]'));
         if ((event.ctrlKey || event.metaKey) && key === 'z') {
           const redo = event.shiftKey;
           if ((redo ? history?.canRedo : history?.canUndo) && historyControl) {
             event.preventDefault();
             void (redo ? historyControl.redo() : historyControl.undo());
           }
-        } else if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && currentFrame !== null) {
+        } else if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && accepted && edit &&
+          panelShortcutTarget &&
+          (key === 'x' || key === 'c' || key === 'v')) {
+          const scope = editScope();
+          if (scope && (key === 'v' ? selectedTrack && currentFrame !== null :
+            selectedClip && selection?.trackId)) {
+            event.preventDefault();
+            if (event.repeat) return;
+            if (key === 'v' && selectedTrack && currentFrame !== null && graph) {
+              event.currentTarget.focus({ preventScroll: true });
+              void edit.pasteClip({ ...scope, target: { projectId: scope.projectId,
+                graphId: graph.graphId, sequenceId: scope.sequenceId,
+                trackId: selectedTrack.id, frame: currentFrame, ownerTabId: tabId } });
+            } else if (selection?.trackId && selection.clipId) {
+              if (key === 'x') event.currentTarget.focus({ preventScroll: true });
+              const intent = { ...scope, trackId: selection.trackId, clipId: selection.clipId };
+              void (key === 'x' ? edit.cutClip(intent) : edit.copyClip(intent));
+            }
+          }
+        } else if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey &&
+          key === 'k' && panelShortcutTarget && accepted && edit && selectedTrack && currentFrame !== null) {
+          const scope = editScope();
+          if (scope) {
+            event.preventDefault();
+            if (!event.repeat) void edit.splitClip({ ...scope, trackId: selectedTrack.id, frame: currentFrame });
+          }
+        } else if (!event.ctrlKey && !event.metaKey && !event.altKey && currentFrame !== null) {
+          if (key === 'delete' && panelShortcutTarget && accepted && edit && selectedClip && selection?.trackId) {
+            const scope = editScope();
+            if (scope) {
+              event.preventDefault();
+              if (!event.repeat) {
+                event.currentTarget.focus({ preventScroll: true });
+                void edit.deleteClip({ ...scope, trackId: selection.trackId,
+                  clipId: selectedClip.id, ripple: event.shiftKey });
+              }
+            }
+          }
+          if (event.shiftKey) return;
+          if (key === ' ' && transportControl && !transport?.disabledReason && panelShortcutTarget) {
+            event.preventDefault();
+            if (!event.repeat) {
+              if (transport?.playing) transportControl.pause();
+              else transportControl.play();
+            }
+          }
+          if ((key === 'j' || key === 'k' || key === 'l') && transportControl &&
+            (key === 'k' || !transport?.disabledReason) && panelShortcutTarget) {
+            event.preventDefault();
+            if (!event.repeat) transportControl.shuttle(key === 'j' ? -1 : key === 'l' ? 1 : 0);
+          }
+          if (key === 's' && panelShortcutTarget && viewportTap) {
+            event.preventDefault();
+            if (!event.repeat) viewportTap.set({ startFrame, pixelsPerFrame,
+              verticalScroll: viewport?.verticalScroll ?? 0, snapEnabled: !snapEnabled });
+          }
+          if ((key === '=' || key === '-') && panelShortcutTarget && viewportTap) {
+            event.preventDefault();
+            if (!event.repeat) changeZoom(key === '=' ? pixelsPerFrame * 2 : pixelsPerFrame / 2);
+          }
           if (key.startsWith('arrow') && transportControl &&
               !(event.target instanceof Element && event.target.closest('input[type="range"]'))) {
             const next = key === 'arrowleft' ? currentFrame - 1 :
@@ -223,6 +301,7 @@ export function Timeline({ tabId }: { tabId: string }) {
           </div>
           <output className="gvid-timeline-clock" aria-label="Current timecode">
             {timecode(currentFrame, transport?.rate.num ?? 24, transport?.rate.den ?? 1)} <small>f{currentFrame ?? '-'}</small>
+            {!!transport?.shuttleRate && <small> {transport.shuttleRate}x</small>}
           </output>
         </div>
         <div className="gvid-timeline-control-section" aria-label="Playback marks">
@@ -275,9 +354,13 @@ export function Timeline({ tabId }: { tabId: string }) {
               disabled={!viewportTap} onChange={(event) => changeZoom(Number(event.target.value))} />
             <button type="button" title="Zoom in" disabled={!viewportTap || pixelsPerFrame >= 32} onClick={() => changeZoom(pixelsPerFrame * 2)}>+</button>
           </div>
+          <label className="gvid-timeline-snap"><input type="checkbox" checked={snapEnabled}
+            disabled={!viewportTap} onChange={(event) => viewportTap?.set({ startFrame, pixelsPerFrame,
+              verticalScroll: viewport?.verticalScroll ?? 0, snapEnabled: event.currentTarget.checked })} />Snap</label>
           <input type="range" min="0" max={Math.max(0, duration - 1)} step="1" value={startFrame}
             aria-label="Timeline scroll" disabled={!viewportTap || duration <= 1} onChange={(event) => viewportTap?.set({
-              startFrame: Number(event.target.value), pixelsPerFrame, verticalScroll: viewport?.verticalScroll ?? 0,
+              startFrame: Number(event.target.value), pixelsPerFrame,
+              verticalScroll: viewport?.verticalScroll ?? 0, snapEnabled,
             })} />
         </div>
         <div className="gvid-timeline-feedback" role="status">
@@ -412,6 +495,15 @@ export function Timeline({ tabId }: { tabId: string }) {
                     trimDraft.expectedRevision === project?.revision ? trimDraft : null;
                   const visualIn = draft?.edge === 'in' ? draft.frame : clip.timelineIn;
                   const visualOut = draft?.edge === 'out' ? draft.frame : clip.timelineOut;
+                  const trimFrameAtPointer = (clientX: number, lane: HTMLElement, edge: 'in' | 'out') => {
+                    const min = edge === 'in' ? inMin : outMin;
+                    const max = edge === 'in' ? inMax : outMax;
+                    const bounded = Math.max(min, Math.min(max, frameAtPointer(clientX, lane)));
+                    return snapEnabled && sequence ? snapTimelineFrame(sequence, bounded, {
+                      pixelsPerFrame, anchors: snapAnchors, excludeClipId: clip.id,
+                      minFrame: min, maxFrame: max,
+                    }) : bounded;
+                  };
                   const trimHandle = (edge: 'in' | 'out') => <button type="button" key={edge}
                     className={`gvid-timeline-trim gvid-timeline-trim-${edge}`}
                     title={`Trim ${edge === 'in' ? 'start' : 'end'} of ${asset?.displayName ?? clip.assetId}`}
@@ -434,8 +526,7 @@ export function Timeline({ tabId }: { tabId: string }) {
                         current.trackId !== track.id || current.edge !== edge) return;
                       const lane = event.currentTarget.closest<HTMLElement>('.gvid-timeline-lane');
                       if (!lane) return;
-                      const frame = Math.max(edge === 'in' ? inMin : outMin,
-                        Math.min(edge === 'in' ? inMax : outMax, frameAtPointer(event.clientX, lane)));
+                      const frame = trimFrameAtPointer(event.clientX, lane, edge);
                       if (frame !== current.frame) trimDraftTap?.set({ ...current, frame });
                     }}
                     onPointerUp={(event) => {
@@ -444,8 +535,7 @@ export function Timeline({ tabId }: { tabId: string }) {
                       if (!current || current.pointerId !== event.pointerId || current.clipId !== clip.id ||
                         current.trackId !== track.id || current.edge !== edge) return;
                       const lane = event.currentTarget.closest<HTMLElement>('.gvid-timeline-lane');
-                      const frame = lane ? Math.max(edge === 'in' ? inMin : outMin,
-                        Math.min(edge === 'in' ? inMax : outMax, frameAtPointer(event.clientX, lane))) : current.frame;
+                      const frame = lane ? trimFrameAtPointer(event.clientX, lane, edge) : current.frame;
                       trimDraftTap?.set(null);
                       if (frame !== (edge === 'in' ? clip.timelineIn : clip.timelineOut)) {
                         void edit?.trimClip({ ...current, frame });

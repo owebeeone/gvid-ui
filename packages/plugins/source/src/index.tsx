@@ -60,6 +60,20 @@ export function SourceViewer() {
             void (redo ? historyControl.redo() : historyControl.undo());
           }
         } else if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && canNavigate) {
+          if (key === ' ' && controls && !transport?.disabledReason &&
+            !(event.target instanceof Element && event.target.closest('button, input, select, textarea, a, [contenteditable]'))) {
+            event.preventDefault();
+            if (!event.repeat) {
+              if (transport?.playing) controls.pause();
+              else controls.play();
+            }
+          }
+          if ((key === 'j' || key === 'k' || key === 'l') && controls &&
+            (key === 'k' || !transport?.disabledReason) &&
+            !(event.target instanceof Element && event.target.closest('button, input, select, textarea, a, [contenteditable]'))) {
+            event.preventDefault();
+            if (!event.repeat) controls.shuttle(key === 'j' ? -1 : key === 'l' ? 1 : 0);
+          }
           if (key.startsWith('arrow') && controls) {
             const delta = key === 'arrowleft' ? -1 : key === 'arrowright' ? 1 :
               key === 'arrowup' ? 10 : key === 'arrowdown' ? -10 : 0;
@@ -117,7 +131,8 @@ export function SourceViewer() {
             disabled={!canNavigate || transport!.frame! >= transport!.frameCount - 1}
             onClick={() => controls?.step(1)}>→</button>
           <span className="gvid-source-counter">{transport?.frame === null || transport?.frame === undefined ? '--' : transport.frame + 1}
-            <span> / {transport?.frameCount ?? 0}</span></span>
+            <span> / {transport?.frameCount ?? 0}</span>
+            {!!transport?.shuttleRate && <span> {transport.shuttleRate}x</span>}</span>
         </div>
         <div className="gvid-source-scrubber" aria-label="Source clip range">
           <div className="gvid-source-scrubber-track">

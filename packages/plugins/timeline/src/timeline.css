@@ -43,6 +43,8 @@
 .gvid-timeline-clock { font-family: Consolas, monospace; font-size: 11px; white-space: nowrap; }
 .gvid-timeline-clock small { color: var(--tl-muted); font: inherit; }
 .gvid-timeline-zoom input { flex: 1 1 40px; min-width: 40px; width: 40px; accent-color: var(--tl-accent); }
+.gvid-timeline-snap { align-items: center; display: flex; gap: 5px; width: fit-content; }
+.gvid-timeline-snap input { accent-color: var(--tl-accent); margin: 0; }
 .gvid-timeline-control-section > input[type='range'] { accent-color: var(--tl-accent); width: 100%; }
 .gvid-timeline-feedback { color: var(--tl-muted); font-size: 11px; overflow-wrap: anywhere; padding-top: 5px; }
 .gvid-timeline-workspace { min-height: 0; min-width: 0; overflow: hidden; }

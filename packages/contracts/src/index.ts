@@ -150,6 +150,24 @@ export interface DeleteTrack extends TimelineEditScope {
   trackId: string;
 }
 
+export interface SelectedTimelineClip extends TimelineEditScope {
+  trackId: string;
+  clipId: string;
+}
+
+export interface DeleteTimelineClip extends SelectedTimelineClip {
+  ripple: boolean;
+}
+
+export interface SplitTimelineClip extends TimelineEditScope {
+  trackId: string;
+  frame: number;
+}
+
+export interface PasteTimelineClip extends TimelineEditScope {
+  target: InsertTarget;
+}
+
 export interface PlaceSourceSpan extends InsertSourceSpan, TimelineEditScope {}
 
 export interface MoveTimelineClip extends TimelineEditScope {
@@ -170,6 +188,11 @@ export interface EditorControl {
   place(intent: PlaceSourceSpan): Promise<EditorResult>;
   addTrack(intent: TimelineEditScope): Promise<EditorResult>;
   deleteTrack(intent: DeleteTrack): Promise<EditorResult>;
+  copyClip(intent: SelectedTimelineClip): Promise<EditorResult>;
+  cutClip(intent: SelectedTimelineClip): Promise<EditorResult>;
+  pasteClip(intent: PasteTimelineClip): Promise<EditorResult>;
+  deleteClip(intent: DeleteTimelineClip): Promise<EditorResult>;
+  splitClip(intent: SplitTimelineClip): Promise<EditorResult>;
   moveClip(intent: MoveTimelineClip): Promise<EditorResult>;
   trimClip(intent: TrimTimelineClip): Promise<EditorResult>;
 }
@@ -260,6 +283,7 @@ export interface TransportView {
   frame: number | null;
   frameCount: number;
   playing: boolean;
+  shuttleRate: number;
   rate: Rational;
   disabledReason?: string;
 }
@@ -267,6 +291,7 @@ export interface TransportView {
 export interface TransportControl {
   play(): void;
   pause(): void;
+  shuttle(direction: -1 | 0 | 1): void;
   seek(frame: number): void;
   step(delta: number): void;
 }
@@ -293,6 +318,7 @@ export interface TimelineViewport {
   startFrame: number;
   pixelsPerFrame: number;
   verticalScroll: number;
+  snapEnabled: boolean;
 }
 
 export interface Diagnostic {

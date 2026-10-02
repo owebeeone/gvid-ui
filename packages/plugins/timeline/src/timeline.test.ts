@@ -6,7 +6,7 @@ import {
   GVID_TIMELINE_TRANSPORT, type AssetRecord, type ChangeStatus, type GraphView, type ProjectView,
   type SequenceView, type SourceDragSpan, type TimelineClipDrag,
 } from '@gvidjs/contracts';
-import { boundedFrame, clipBoundaryFrame, frameFromTimelineX, markState, projectDropPreview,
+import { boundedFrame, clipBoundaryFrame, frameFromTimelineX, markState, projectDropPreview, snapTimelineFrame,
   TimelineTabTap } from './timeline';
 
 const sequence: SequenceView = {
@@ -90,6 +90,14 @@ describe('timeline tab transport', () => {
     expect(projectDropPreview(sequence, 'missing', 6, { kind: 'clip', moving: clipDrag })).toBeNull();
     expect(projectDropPreview({ ...sequence, tracks: [{ ...sequence.tracks[0], locked: true }] }, 'v1', 6,
       { kind: 'clip', moving: clipDrag })).toBeNull();
+  });
+
+  it('snaps clip starts, ends, and trim edges only within the pixel tolerance', () => {
+    expect(snapTimelineFrame(sequence, 5, { pixelsPerFrame: 8 })).toBe(4);
+    expect(snapTimelineFrame(sequence, 6, { pixelsPerFrame: 8 })).toBe(6);
+    expect(snapTimelineFrame(sequence, 9, { pixelsPerFrame: 8, spanFrames: 5 })).toBe(8);
+    expect(snapTimelineFrame(sequence, 10, { pixelsPerFrame: 8, anchors: [11] })).toBe(11);
+    expect(snapTimelineFrame(sequence, 5, { pixelsPerFrame: 8, minFrame: 5, maxFrame: 7 })).toBe(5);
   });
 
   it('visits current clip edges before adjacent clip edges', () => {
@@ -188,6 +196,43 @@ describe('timeline tab transport', () => {
     expect(read(GVID_TIMELINE_TRANSPORT)?.playing).toBe(false);
   });
 
+  it('shuttles backward and forward, accelerates on repeated direction, and stops on K', () => {
+    vi.useFakeTimers();
+    const { tap, read } = setup();
+    tap.transportControl.seek(5);
+    tap.transportControl.shuttle(-1);
+    expect(read(GVID_TIMELINE_TRANSPORT)?.shuttleRate).toBe(-1);
+    vi.advanceTimersByTime(42);
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(4);
+    tap.transportControl.shuttle(-1);
+    expect(read(GVID_TIMELINE_TRANSPORT)?.shuttleRate).toBe(-2);
+    vi.advanceTimersByTime(42);
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(2);
+    tap.transportControl.shuttle(1);
+    expect(read(GVID_TIMELINE_TRANSPORT)?.shuttleRate).toBe(1);
+    vi.advanceTimersByTime(42);
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(3);
+    tap.transportControl.shuttle(0);
+    expect(read(GVID_TIMELINE_TRANSPORT)).toMatchObject({ playing: false, shuttleRate: 0 });
+  });
+
+  it('shuttles backward inside marked bounds without publishing the exclusive Out', () => {
+    vi.useFakeTimers();
+    const { tap, read } = setup();
+    tap.transportControl.seek(2);
+    tap.marksControl.setIn();
+    tap.transportControl.seek(5);
+    tap.marksControl.setOut();
+    tap.transportControl.seek(7);
+    tap.transportControl.shuttle(-1);
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(5);
+    vi.advanceTimersByTime(42);
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(4);
+    vi.advanceTimersByTime(125);
+    expect(read(GVID_DEST_TIMELINE_FRAME)).toBe(2);
+    expect(read(GVID_TIMELINE_TRANSPORT)).toMatchObject({ playing: false, shuttleRate: 0 });
+  });
+
   it('keeps an Out-only mark at frame zero pending without limiting playback', () => {
     vi.useFakeTimers();
     const { tap, read } = setup();
@@ -283,11 +328,12 @@ describe('timeline tab transport', () => {
     tap.transportControl.seek(3);
     tap.marksControl.setIn();
     tap.selectionHandle.set({ trackId: 'v1', clipId: 'a' });
-    tap.viewportHandle.set({ startFrame: 4, pixelsPerFrame: 16, verticalScroll: 0 });
+    tap.viewportHandle.set({ startFrame: 4, pixelsPerFrame: 16, verticalScroll: 0, snapEnabled: false });
     expect(read(GVID_TIMELINE_MARKS)?.inFrame).toBe(3);
     expect(otherRead(GVID_TIMELINE_MARKS)?.validity).toBe('unset');
     expect(otherRead(GVID_TIMELINE_SELECTION)).toEqual({ trackId: null, clipId: null });
-    expect(other.viewportHandle.get()).toEqual({ startFrame: 0, pixelsPerFrame: 8, verticalScroll: 0 });
+    expect(other.viewportHandle.get()).toEqual({ startFrame: 0, pixelsPerFrame: 8,
+      verticalScroll: 0, snapEnabled: true });
     expect(otherRead(GVID_DEST_TIMELINE_FRAME)).toBe(0);
   });
 });

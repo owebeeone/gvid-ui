@@ -27,6 +27,31 @@ export function boundedFrame(frame: number, duration: number): number | null {
   return Number.isInteger(frame) && frame >= 0 && frame < duration ? frame : null;
 }
 
+export function snapTimelineFrame(sequence: SequenceView, frame: number, options: {
+  pixelsPerFrame: number;
+  spanFrames?: number;
+  anchors?: readonly number[];
+  excludeClipId?: string;
+  minFrame?: number;
+  maxFrame?: number;
+}): number {
+  if (!Number.isSafeInteger(frame) || !Number.isFinite(options.pixelsPerFrame) ||
+    options.pixelsPerFrame <= 0) return frame;
+  const span = options.spanFrames ?? 0;
+  const anchors = [0, sequence.durationFrames, ...(options.anchors ?? [])];
+  for (const track of sequence.tracks) for (const clip of track.clips) {
+    if (clip.id !== options.excludeClipId) anchors.push(clip.timelineIn, clip.timelineOut);
+  }
+  let snapped = frame;
+  let distance = Infinity;
+  for (const anchor of anchors) for (const candidate of span > 0 ? [anchor, anchor - span] : [anchor]) {
+    if (candidate < (options.minFrame ?? 0) || candidate > (options.maxFrame ?? Number.MAX_SAFE_INTEGER)) continue;
+    const pixels = Math.abs(frame - candidate) * options.pixelsPerFrame;
+    if (pixels <= 8 && pixels < distance) { snapped = candidate; distance = pixels; }
+  }
+  return snapped;
+}
+
 export function clipBoundaryFrame(sequence: SequenceView, frame: number, direction: 'up' | 'down'): number {
   if (boundedFrame(frame, sequence.durationFrames) === null) return frame;
   let current: SequenceClip | null = null;
@@ -121,10 +146,12 @@ export class TimelineTabTap extends BaseTap {
   private sequenceId: string | null = null;
   private frame: number | null = null;
   private playing = false;
+  private shuttleRate = 0;
   private inFrame: number | null = null;
   private outFrame: number | null = null;
   private selection: TimelineSelection = { trackId: null, clipId: null };
-  private viewport: TimelineViewport = { startFrame: 0, pixelsPerFrame: DEFAULT_ZOOM, verticalScroll: 0 };
+  private viewport: TimelineViewport = { startFrame: 0, pixelsPerFrame: DEFAULT_ZOOM,
+    verticalScroll: 0, snapEnabled: true };
   private timer: ReturnType<typeof setInterval> | null = null;
 
   readonly sequenceHandle: AtomTapHandle<string | null> = {
@@ -145,6 +172,7 @@ export class TimelineTabTap extends BaseTap {
   readonly transportControl: TransportControl = {
     play: () => this.play(),
     pause: () => this.pause(),
+    shuttle: (direction) => this.shuttle(direction),
     seek: (frame) => this.seek(frame),
     step: (delta) => this.step(delta),
   };
@@ -192,6 +220,7 @@ export class TimelineTabTap extends BaseTap {
     if (this.timer !== null) clearInterval(this.timer);
     this.timer = null;
     this.playing = false;
+    this.shuttleRate = 0;
   }
 
   private reconcile(): void {
@@ -267,6 +296,7 @@ export class TimelineTabTap extends BaseTap {
       pixelsPerFrame: Number.isFinite(value.pixelsPerFrame)
         ? Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value.pixelsPerFrame)) : this.viewport.pixelsPerFrame,
       verticalScroll: Number.isFinite(value.verticalScroll) ? Math.max(0, value.verticalScroll) : this.viewport.verticalScroll,
+      snapEnabled: typeof value.snapEnabled === 'boolean' ? value.snapEnabled : this.viewport.snapEnabled,
     };
     this.produce();
   }
@@ -289,17 +319,26 @@ export class TimelineTabTap extends BaseTap {
   }
 
   private play(): void {
+    if (!this.playing) this.shuttle(1);
+  }
+
+  private shuttle(direction: -1 | 0 | 1): void {
+    if (direction === 0) { this.pause(); return; }
     if (!this.live) return;
     const duration = this.sequence?.durationFrames ?? 0;
     const marks = markState(this.inFrame, this.outFrame, duration);
-    if (this.frame === null || this.playing || marks.validity === 'invalid' || duration <= 0) return;
+    if (this.frame === null || marks.validity === 'invalid' || duration <= 0) return;
     const start = marks.validity === 'valid' ? marks.inFrame! : 0;
     const end = marks.validity === 'valid' ? marks.outFrame! : duration;
-    if (this.frame < start || this.frame >= end) this.frame = start;
-    this.playing = true;
-    const rate = this.sequence?.frameRate;
-    const interval = rate && rate.num > 0 && rate.den > 0 ? 1000 * rate.den / rate.num : 1000 / 24;
-    this.timer = setInterval(() => this.tick(), interval);
+    if (this.frame < start || this.frame >= end) this.frame = direction > 0 ? start : end - 1;
+    this.shuttleRate = this.playing && Math.sign(this.shuttleRate) === direction ?
+      direction * Math.min(4, Math.abs(this.shuttleRate) * 2) : direction;
+    if (!this.playing) {
+      this.playing = true;
+      const rate = this.sequence?.frameRate;
+      const interval = rate && rate.num > 0 && rate.den > 0 ? 1000 * rate.den / rate.num : 1000 / 24;
+      this.timer = setInterval(() => this.tick(), interval);
+    }
     this.produce();
   }
 
@@ -308,9 +347,13 @@ export class TimelineTabTap extends BaseTap {
     const duration = this.sequence?.durationFrames ?? 0;
     const marks = markState(this.inFrame, this.outFrame, duration);
     if (!this.live || !this.playing || this.frame === null || marks.validity === 'invalid') { this.stopClock(); this.produce(); return; }
+    const start = marks.validity === 'valid' ? marks.inFrame! : 0;
     const end = marks.validity === 'valid' ? marks.outFrame! : duration;
-    if (this.frame + 1 >= end) this.stopClock();
-    else this.frame += 1;
+    const next = this.frame + this.shuttleRate;
+    if (next < start || next >= end) {
+      this.frame = Math.max(start, Math.min(end - 1, next));
+      this.stopClock();
+    } else this.frame = next;
     this.produce();
   }
 
@@ -337,6 +380,7 @@ export class TimelineTabTap extends BaseTap {
     const marks = markState(this.inFrame, this.outFrame, duration);
     const transport: TransportView = {
       frame: this.live ? this.frame : null, frameCount: this.live ? duration : 0, playing: this.playing,
+      shuttleRate: this.shuttleRate,
       rate: this.sequence?.frameRate ?? { num: 24, den: 1 },
       disabledReason: !this.live || !this.sequence ? 'No live sequence is available.'
         : this.frame === null ? 'The sequence has no playable frames.'

@@ -57,7 +57,9 @@ function harness(sourceLink: DesktopTabLinkInfo = {
     status: 'accepted-session-only' as const, revision: 5, message: 'Inserted', commandId: 'cmd-1',
   }));
   const command = createAtomValueTap(GVID_EDIT_COMMAND, { initial: {
-    insert, place: vi.fn(), addTrack: vi.fn(), deleteTrack: vi.fn(), moveClip: vi.fn(), trimClip: vi.fn(),
+    insert, place: vi.fn(), addTrack: vi.fn(), deleteTrack: vi.fn(),
+    copyClip: vi.fn(), cutClip: vi.fn(), pasteClip: vi.fn(),
+    deleteClip: vi.fn(), splitClip: vi.fn(), moveClip: vi.fn(), trimClip: vi.fn(),
   } satisfies EditorControl });
   const requests: Array<{
     key: SourceFrameKey; asset: AssetRecord; signal: AbortSignal;
@@ -347,6 +349,34 @@ describe('SourceTabTap', () => {
     expect(h.read(GVID_DEST_SOURCE_FRAME)).toBe(3);
     expect(h.read(GVID_SOURCE_TRANSPORT)?.playing).toBe(false);
     expect(h.requests.every((request) => request.key.sourceFrame < lighthouse.frameCount)).toBe(true);
+    h.close();
+  });
+
+  it('shuttles source frames in both directions and stops at marked In', () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.tap.seek(2);
+    h.tap.setIn();
+    h.tap.seek(7);
+    h.tap.setOut();
+    h.tap.seek(6);
+    h.tap.shuttle(-1);
+    expect(h.read(GVID_SOURCE_TRANSPORT)?.shuttleRate).toBe(-1);
+    vi.advanceTimersByTime(42);
+    expect(h.read(GVID_DEST_SOURCE_FRAME)).toBe(5);
+    h.tap.shuttle(-1);
+    expect(h.read(GVID_SOURCE_TRANSPORT)?.shuttleRate).toBe(-2);
+    vi.advanceTimersByTime(42);
+    expect(h.read(GVID_DEST_SOURCE_FRAME)).toBe(3);
+    h.tap.shuttle(1);
+    vi.advanceTimersByTime(42);
+    expect(h.read(GVID_DEST_SOURCE_FRAME)).toBe(4);
+    h.tap.shuttle(0);
+    expect(h.read(GVID_SOURCE_TRANSPORT)).toMatchObject({ playing: false, shuttleRate: 0 });
+    h.tap.shuttle(-1);
+    vi.advanceTimersByTime(125);
+    expect(h.read(GVID_DEST_SOURCE_FRAME)).toBe(2);
+    expect(h.read(GVID_SOURCE_TRANSPORT)?.playing).toBe(false);
     h.close();
   });
 

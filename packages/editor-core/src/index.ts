@@ -7,8 +7,9 @@ import {
   GVID_PROJECT_CONTROL, GVID_PROJECT_VIEW, GVID_SEQUENCE_VIEW, GVID_TOOLS,
   type AssetRecord, type BindingView, type ChangeStatus, type EditorControl,
   type ChangeFootprint, type EditorResult, type GraphView, type HistoryControl, type HistoryView,
-  type DeleteTrack, type InsertSourceSpan, type InsertTarget, type InsertTargetControl,
-  type MoveTimelineClip, type PlaceSourceSpan, type ProjectControl, type ProjectTransitionResult, type ProjectView,
+  type DeleteTimelineClip, type DeleteTrack, type InsertSourceSpan, type InsertTarget, type InsertTargetControl,
+  type MoveTimelineClip, type PasteTimelineClip, type PlaceSourceSpan, type ProjectControl, type ProjectTransitionResult, type ProjectView,
+  type SelectedTimelineClip, type SplitTimelineClip,
   type SequenceClip, type SequenceTrack, type SequenceView, type TimelineEditScope,
   type TrimTimelineClip,
 } from '@gvidjs/contracts';
@@ -19,6 +20,14 @@ const EMPTY_SEQUENCE: SequenceView = Object.freeze({
 });
 
 interface JournalEntry { before: SequenceView; after: SequenceView; fromFrame: number; label: string }
+interface ClipClipboard {
+  projectId: string;
+  sessionId: string;
+  assetId: string;
+  assetVersion: string;
+  sourceIn: number;
+  sourceOut: number;
+}
 interface State {
   project: ProjectView;
   graph: GraphView;
@@ -27,6 +36,7 @@ interface State {
   change: ChangeStatus;
   target: InsertTarget | null;
   result: EditorResult | null;
+  clipboard: ClipClipboard | null;
   journal: readonly JournalEntry[];
   cursor: number;
 }
@@ -73,7 +83,7 @@ function initialState(projectId: 'mock-a' | 'mock-b'): State {
       bindingSetId: binding.bindingSetId, bindingRevision: 1, sessionOnly: true, status: 'ready',
     }),
     graph: Object.freeze({ graphId: seq.graphId, revision: 1, sequence: seq }),
-    assets, binding, change: Object.freeze({ state: 'live' }), target: null, result: null,
+    assets, binding, change: Object.freeze({ state: 'live' }), target: null, result: null, clipboard: null,
     journal: Object.freeze([]), cursor: 0,
   };
 }
@@ -87,7 +97,7 @@ function closedState(): State {
     graph: Object.freeze({ graphId: '', revision: 0, sequence: EMPTY_SEQUENCE }),
     assets: Object.freeze([]),
     binding: Object.freeze({ bindingSetId: '', revision: 0, byAssetId: Object.freeze({}) }),
-    change: Object.freeze({ state: 'closed' }), target: null, result: null,
+    change: Object.freeze({ state: 'closed' }), target: null, result: null, clipboard: null,
     journal: Object.freeze([]), cursor: 0,
   };
 }
@@ -235,6 +245,39 @@ function trimClip(seq: SequenceView, intent: TrimTimelineClip): SequenceView | n
   return Object.freeze({ ...seq, durationFrames: Math.max(seq.durationFrames, trimmed.timelineOut), tracks });
 }
 
+function liftClip(seq: SequenceView, trackId: string, clipId: string): SequenceView {
+  return Object.freeze({ ...seq, tracks: Object.freeze(seq.tracks.map((track) => track.id === trackId ?
+    Object.freeze({ ...track, clips: Object.freeze(track.clips.filter((clip) => clip.id !== clipId)) }) : track)) });
+}
+
+export function rippleDeleteSpan(seq: SequenceView, start: number, end: number,
+  splitId: string): SequenceView | null {
+  if (!isFrame(start) || !isFrame(end) || start >= end || end > seq.durationFrames) return null;
+  const duration = end - start;
+  const tracks = seq.tracks.map((track) => {
+    if (track.locked && track.clips.some((clip) => clip.timelineOut > start)) return null;
+    const clips: SequenceClip[] = [];
+    for (const clip of track.clips) {
+      if (clip.timelineOut <= start) clips.push(clip);
+      else if (clip.timelineIn >= end) clips.push(Object.freeze({ ...clip,
+        timelineIn: clip.timelineIn - duration, timelineOut: clip.timelineOut - duration }));
+      else {
+        const left = clip.timelineIn < start;
+        if (left) clips.push(Object.freeze({ ...clip,
+          sourceOut: clip.sourceIn + start - clip.timelineIn, timelineOut: start }));
+        if (clip.timelineOut > end) clips.push(Object.freeze({ ...clip,
+          id: left ? `${splitId}-${track.id}-${clip.id}` : clip.id,
+          sourceIn: clip.sourceOut - (clip.timelineOut - end),
+          timelineIn: start, timelineOut: clip.timelineOut - duration }));
+      }
+    }
+    return Object.freeze({ ...track, clips: Object.freeze(clips) });
+  });
+  if (tracks.some((track) => track === null)) return null;
+  return Object.freeze({ ...seq, durationFrames: seq.durationFrames - duration,
+    tracks: Object.freeze(tracks as SequenceTrack[]) });
+}
+
 // One root producer publishes every accepted projection together before an edit promise settles.
 class MockEditorRootTap extends BaseTap {
   private state: State = initialState('mock-a');
@@ -251,6 +294,9 @@ class MockEditorRootTap extends BaseTap {
   private readonly editorControl: EditorControl = {
     insert: (intent) => this.insert(intent), place: (intent) => this.place(intent),
     addTrack: (intent) => this.addTrack(intent), deleteTrack: (intent) => this.deleteTrack(intent),
+    copyClip: (intent) => this.copyClip(intent), cutClip: (intent) => this.cutClip(intent),
+    pasteClip: (intent) => this.pasteClip(intent),
+    deleteClip: (intent) => this.deleteClip(intent), splitClip: (intent) => this.splitClip(intent),
     moveClip: (intent) => this.moveClip(intent), trimClip: (intent) => this.trimClip(intent),
   };
   private readonly historyControl: HistoryControl = {
@@ -357,7 +403,7 @@ class MockEditorRootTap extends BaseTap {
     return Promise.resolve(result);
   }
   private accept(seq: SequenceView, journal: readonly JournalEntry[], cursor: number,
-    fromFrame: number, message: string): Promise<EditorResult> {
+    fromFrame: number, message: string, clipboard = this.state.clipboard): Promise<EditorResult> {
     const revision = this.state.graph.revision + 1;
     const accepted = Object.freeze({ ...seq, revision });
     const footprint: ChangeFootprint = Object.freeze({
@@ -369,7 +415,7 @@ class MockEditorRootTap extends BaseTap {
     const graph = Object.freeze({ graphId: this.state.graph.graphId, revision, sequence: accepted });
     const target = this.state.target && this.state.target.frame <= accepted.durationFrames &&
       accepted.tracks.some((track) => track.id === this.state.target?.trackId) ? this.state.target : null;
-    this.commit({ ...this.state, project, graph, target, result, journal, cursor });
+    this.commit({ ...this.state, project, graph, target, result, journal, cursor, clipboard });
     return Promise.resolve(result);
   }
 
@@ -434,6 +480,114 @@ class MockEditorRootTap extends BaseTap {
     const entry: JournalEntry = Object.freeze({ before: seq, after: next, fromFrame: 0, label: 'Delete track' });
     const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
     return this.accept(next, journal, journal.length, 0, `Deleted ${track.label} and its clips; session only.`);
+  }
+
+  private selectedClip(intent: SelectedTimelineClip): { track: SequenceTrack; clip: SequenceClip; clipboard: ClipClipboard } | null {
+    const track = this.state.graph.sequence.tracks.find((item) => item.id === intent.trackId);
+    const clip = track?.clips.find((item) => item.id === intent.clipId);
+    const asset = this.state.assets.find((item) => item.id === clip?.assetId && item.status === 'ready');
+    if (!track || !clip || !asset || !this.state.binding.byAssetId[asset.id]) return null;
+    return { track, clip, clipboard: Object.freeze({
+      projectId: this.state.project.projectId!, sessionId: this.state.project.sessionId,
+      assetId: asset.id, assetVersion: asset.version, sourceIn: clip.sourceIn, sourceOut: clip.sourceOut,
+    }) };
+  }
+
+  private copyClip(intent: SelectedTimelineClip): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const selected = this.selectedClip(intent);
+    if (!selected) return this.reject('Selected clip is no longer available.');
+    const result = this.makeResult('accepted-session-only', 'Copied clip; session only.');
+    this.commit({ ...this.state, clipboard: selected.clipboard, result });
+    return Promise.resolve(result);
+  }
+
+  private cutClip(intent: SelectedTimelineClip): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const selected = this.selectedClip(intent);
+    if (!selected || selected.track.locked) return this.reject('Selected clip cannot be cut.');
+    const seq = this.state.graph.sequence;
+    const next = liftClip(seq, selected.track.id, selected.clip.id);
+    if (!validateSequence(next, this.state.assets)) return this.reject('Clip could not be cut.');
+    const entry: JournalEntry = Object.freeze({ before: seq, after: next,
+      fromFrame: selected.clip.timelineIn, label: 'Cut clip' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, selected.clip.timelineIn,
+      'Cut clip; session only.', selected.clipboard);
+  }
+
+  private pasteClip(intent: PasteTimelineClip): Promise<EditorResult> {
+    const { graph, assets, binding, clipboard } = this.state;
+    if (!this.validEditScope(intent) || intent.target.projectId !== intent.projectId ||
+      intent.target.graphId !== graph.graphId || intent.target.sequenceId !== intent.sequenceId ||
+      !this.validTarget(intent.target)) return this.reject('Paste target is stale or not a live timeline.');
+    if (!clipboard || clipboard.projectId !== intent.projectId || clipboard.sessionId !== intent.sessionId) {
+      return this.reject('No clip is copied in this project session.');
+    }
+    const source = assets.find((item) => item.id === clipboard.assetId);
+    if (!source || source.status !== 'ready' || source.version !== clipboard.assetVersion ||
+      !binding.byAssetId[source.id] || clipboard.sourceOut > source.frameCount ||
+      source.frameRate.num !== 24 || source.frameRate.den !== 1) {
+      return this.reject('Copied clip source is no longer available.');
+    }
+    const frame = intent.target.frame;
+    const serial = this.clipSerial + 1;
+    const next = placeSpan(graph.sequence, intent.target.trackId, frame, source,
+      clipboard.sourceIn, clipboard.sourceOut, `paste-${serial}`);
+    if (!next || !validateSequence(next, assets)) return this.reject('Clip cannot be pasted onto that track.');
+    this.clipSerial = serial;
+    const addedTrack = next.tracks.length > graph.sequence.tracks.length;
+    const entry: JournalEntry = Object.freeze({ before: graph.sequence, after: next,
+      fromFrame: frame, label: addedTrack ? 'Paste clip on new track' : 'Paste clip' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, frame,
+      `Pasted clip at ${frame}${addedTrack ? ' on a new track' : ''}; session only.`);
+  }
+
+  private deleteClip(intent: DeleteTimelineClip): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const seq = this.state.graph.sequence;
+    const track = seq.tracks.find((item) => item.id === intent.trackId);
+    const clip = track?.clips.find((item) => item.id === intent.clipId);
+    if (!track || track.locked || !clip) return this.reject('Selected clip cannot be deleted.');
+    const serial = this.clipSerial + 1;
+    const next = intent.ripple ? rippleDeleteSpan(seq, clip.timelineIn, clip.timelineOut, `ripple-${serial}`) :
+      liftClip(seq, track.id, clip.id);
+    if (!next || !validateSequence(next, this.state.assets)) {
+      return this.reject('Ripple delete would change a locked track or invalidate the sequence.');
+    }
+    if (intent.ripple) this.clipSerial = serial;
+    const label = intent.ripple ? 'Ripple delete clip' : 'Delete clip';
+    const entry: JournalEntry = Object.freeze({ before: seq, after: next,
+      fromFrame: clip.timelineIn, label });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, clip.timelineIn,
+      `${label}; session only.`);
+  }
+
+  private splitClip(intent: SplitTimelineClip): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const seq = this.state.graph.sequence;
+    const track = seq.tracks.find((item) => item.id === intent.trackId);
+    const clip = track?.clips.find((item) => item.timelineIn < intent.frame && intent.frame < item.timelineOut);
+    if (!track || track.locked || !clip || !isFrame(intent.frame)) {
+      return this.reject('No unlocked clip crosses the playhead on this track.');
+    }
+    const serial = this.clipSerial + 1;
+    const offset = intent.frame - clip.timelineIn;
+    const left = Object.freeze({ ...clip, sourceOut: clip.sourceIn + offset, timelineOut: intent.frame });
+    const right = Object.freeze({ ...clip, id: `split-${serial}`,
+      sourceIn: clip.sourceIn + offset, timelineIn: intent.frame });
+    const next = Object.freeze({ ...seq, tracks: Object.freeze(seq.tracks.map((row) => row.id === track.id ?
+      Object.freeze({ ...row, clips: Object.freeze(row.clips.flatMap((item) =>
+        item.id === clip.id ? [left, right] : [item])) }) : row)) });
+    if (!validateSequence(next, this.state.assets)) return this.reject('Clip could not be split.');
+    this.clipSerial = serial;
+    const entry: JournalEntry = Object.freeze({ before: seq, after: next,
+      fromFrame: intent.frame, label: 'Split clip' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, intent.frame,
+      `Split clip at ${intent.frame}; session only.`);
   }
 
   private place(intent: PlaceSourceSpan): Promise<EditorResult> {

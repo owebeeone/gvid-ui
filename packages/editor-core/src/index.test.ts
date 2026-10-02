@@ -8,7 +8,7 @@ import {
   GVID_PROJECT_CONTROL, GVID_PROJECT_VIEW, GVID_SEQUENCE_VIEW,
   type InsertSourceSpan, type InsertTarget, type PlaceSourceSpan, type TimelineEditScope,
 } from '@gvidjs/contracts';
-import { registerMockTaps } from './index';
+import { registerMockTaps, rippleDeleteSpan } from './index';
 
 function setup(withLinks = true) {
   const grok = new Grok(registry);
@@ -87,6 +87,98 @@ describe('mock editor root Grips', () => {
     expect(seq.durationFrames).toBe(120);
     expect((await get(GVID_HISTORY_CONTROL).undo()).status).toBe('accepted-session-only');
     expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(1);
+  });
+
+  it('copies whole trimmed clips, cuts them with undo, and pastes at the playhead target', async () => {
+    const { get, scope, target } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const history = get(GVID_HISTORY_CONTROL);
+    const selected = () => ({ ...scope(), trackId: 'v1', clipId: 'clip-a' });
+    expect((await edit.trimClip({ ...selected(), edge: 'in', frame: 8 })).status).toBe('accepted-session-only');
+    const revision = get(GVID_GRAPH_VIEW).revision;
+    expect((await edit.copyClip(selected())).status).toBe('accepted-session-only');
+    expect(get(GVID_GRAPH_VIEW).revision).toBe(revision);
+    expect(get(GVID_HISTORY_VIEW).undoLabel).toBe('Trim clip');
+    expect((await edit.cutClip(selected())).status).toBe('accepted-session-only');
+    expect(ranges(get(GVID_SEQUENCE_VIEW).tracks[0].clips)).toEqual([
+      ['workshop', 5, 53, 48, 96],
+    ]);
+    expect(get(GVID_HISTORY_VIEW).undoLabel).toBe('Cut clip');
+    expect((await history.undo()).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0]).toMatchObject({
+      id: 'clip-a', sourceIn: 20, sourceOut: 60, timelineIn: 8, timelineOut: 48,
+    });
+    expect((await history.redo()).status).toBe('accepted-session-only');
+    expect((await edit.pasteClip({ ...scope(), target: target(0) })).status).toBe('accepted-session-only');
+    expect(ranges(get(GVID_SEQUENCE_VIEW).tracks[0].clips)).toEqual([
+      ['lighthouse', 20, 60, 0, 40], ['workshop', 5, 53, 48, 96],
+    ]);
+    expect(get(GVID_HISTORY_VIEW).undoLabel).toBe('Paste clip');
+    expect((await history.undo()).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips).toHaveLength(1);
+  });
+
+  it('pastes overlaps onto a new track and rejects stale or cross-project clipboard use', async () => {
+    const { get, scope, target } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    expect((await edit.pasteClip({ ...scope(), target: target(24) })).status).toBe('rejected');
+    expect((await edit.copyClip({ ...scope(), trackId: 'v1', clipId: 'clip-a' })).status).toBe('accepted-session-only');
+    expect((await edit.pasteClip({ ...scope(), target: target(24) })).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(2);
+    expect(ranges(get(GVID_SEQUENCE_VIEW).tracks[1].clips)).toEqual([
+      ['lighthouse', 12, 60, 24, 72],
+    ]);
+    expect((await edit.cutClip({ ...scope(), expectedRevision: 1, trackId: 'v1', clipId: 'clip-b' })).status)
+      .toBe('rejected');
+    expect((await edit.pasteClip({ ...scope(), target: { ...target(24), ownerTabId: 'foreign' } })).status)
+      .toBe('rejected');
+    expect(get(GVID_PROJECT_CONTROL).open('mock-b', { discardSessionEdits: true }).status).toBe('opened');
+    expect((await edit.pasteClip({ ...scope(), target: target(24) })).status).toBe('rejected');
+  });
+
+  it('splits the clip crossing the selected track playhead and undoes the split', async () => {
+    const { get, scope } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    expect((await edit.splitClip({ ...scope(), trackId: 'v1', frame: 0 })).status).toBe('rejected');
+    expect((await edit.splitClip({ ...scope(), trackId: 'v1', frame: 24 })).status).toBe('accepted-session-only');
+    expect(ranges(get(GVID_SEQUENCE_VIEW).tracks[0].clips)).toEqual([
+      ['lighthouse', 12, 36, 0, 24], ['lighthouse', 36, 60, 24, 48],
+      ['workshop', 5, 53, 48, 96],
+    ]);
+    expect(get(GVID_SEQUENCE_VIEW).durationFrames).toBe(96);
+    expect((await get(GVID_HISTORY_CONTROL).undo()).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips).toHaveLength(2);
+  });
+
+  it('lifts a clip without closing time, then ripple-deletes it across tracks', async () => {
+    const { get, scope, target, placeIntent } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const history = get(GVID_HISTORY_CONTROL);
+    expect((await edit.deleteClip({ ...scope(), trackId: 'v1', clipId: 'clip-a', ripple: false })).status)
+      .toBe('accepted-session-only');
+    expect(ranges(get(GVID_SEQUENCE_VIEW).tracks[0].clips)).toEqual([
+      ['workshop', 5, 53, 48, 96],
+    ]);
+    expect(get(GVID_SEQUENCE_VIEW).durationFrames).toBe(96);
+    await history.undo();
+    expect((await edit.place(placeIntent(target(0), { assetId: 'lighthouse',
+      sourceIn: 0, sourceOut: 120 }))).status).toBe('accepted-session-only');
+    expect((await edit.deleteClip({ ...scope(), trackId: 'v1', clipId: 'clip-b', ripple: true })).status)
+      .toBe('accepted-session-only');
+    const seq = get(GVID_SEQUENCE_VIEW);
+    expect(seq.durationFrames).toBe(72);
+    expect(ranges(seq.tracks[0].clips)).toEqual([['lighthouse', 12, 60, 0, 48]]);
+    expect(ranges(seq.tracks[1].clips)).toEqual([
+      ['lighthouse', 0, 48, 0, 48], ['lighthouse', 96, 120, 48, 72],
+    ]);
+    expect(get(GVID_HISTORY_VIEW).undoLabel).toBe('Ripple delete clip');
+    await history.undo();
+    expect(get(GVID_SEQUENCE_VIEW).durationFrames).toBe(120);
+    expect(get(GVID_SEQUENCE_VIEW).tracks[1].clips).toHaveLength(1);
+    const locked = { ...seq, tracks: [seq.tracks[0], { ...seq.tracks[1], locked: true }] };
+    expect(rippleDeleteSpan(locked, 0, 24, 'locked-test')).toBeNull();
+    expect((await edit.deleteClip({ ...scope(), expectedRevision: 1,
+      trackId: 'v1', clipId: 'clip-a', ripple: true })).status).toBe('rejected');
   });
 
   it('moves clips within and between tracks, raises overlaps, and undoes the move', async () => {
