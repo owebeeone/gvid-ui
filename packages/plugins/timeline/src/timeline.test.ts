@@ -141,7 +141,7 @@ describe('timeline tab transport', () => {
     expect(clipBoundaryFrame(sequence, 7, 'down')).toBe(7);
   });
 
-  it('jumps across gaps and uses the topmost clip when tracks overlap', () => {
+  it('jumps across gaps and visits overlapping clip boundaries', () => {
     const withGap: SequenceView = { ...sequence, durationFrames: 12, tracks: [{ ...sequence.tracks[0], clips: [
       { ...sequence.tracks[0].clips[0], timelineOut: 2, sourceOut: 14 },
       { ...sequence.tracks[0].clips[1], timelineIn: 6, timelineOut: 10 },
@@ -155,6 +155,26 @@ describe('timeline tab transport', () => {
       clips: [{ id: 'top', assetId: 'workshop', sourceIn: 0, sourceOut: 2, timelineIn: 2, timelineOut: 4 }],
     }] };
     expect(clipBoundaryFrame(layered, 3, 'up')).toBe(2);
+  });
+
+  it('chooses the closest boundary across video and audio tracks', () => {
+    const layered: SequenceView = { ...sequence, durationFrames: 24, tracks: [
+      { id: 'v1', label: 'V1', kind: 'video', locked: false, clips: [
+        { id: 'lower', assetId: 'workshop', sourceIn: 0, sourceOut: 4, timelineIn: 8, timelineOut: 12 },
+      ] },
+      { id: 'v2', label: 'V2', kind: 'video', locked: false, clips: [
+        { id: 'upper', assetId: 'lighthouse', sourceIn: 0, sourceOut: 20, timelineIn: 0, timelineOut: 20 },
+      ] },
+      { id: 'a3', label: 'A3', kind: 'audio', locked: false, clips: [
+        { id: 'audio', assetId: 'workshop', sourceIn: 0, sourceOut: 3, timelineIn: 13, timelineOut: 16 },
+      ] },
+    ] };
+    expect(clipBoundaryFrame(layered, 10, 'up')).toBe(8);
+    expect(clipBoundaryFrame(layered, 10, 'down')).toBe(11);
+    expect(clipBoundaryFrame(layered, 11, 'down')).toBe(13);
+    expect(clipBoundaryFrame(layered, 13, 'down')).toBe(15);
+    expect(clipBoundaryFrame(layered, 15, 'down')).toBe(19);
+    expect(clipBoundaryFrame(layered, 8, 'up')).toBe(0);
   });
 
   it('keeps exact pending, valid and invalid half-open marks', () => {

@@ -9,6 +9,7 @@ import {
 import { Assets } from './index';
 import { visibleAssets } from './catalog';
 import { AssetSelectionTabTap } from './selection';
+import { GVID_LIBRARY_UI, GVID_LIBRARY_VIEW, emptyLibrary, removeAsset } from './library';
 
 const lighthouse: AssetRecord = {
   id: 'asset-a', displayName: 'Lighthouse', version: 'v1', fingerprint: 'a', streamId: 'v0',
@@ -27,6 +28,8 @@ function setup(initial: readonly AssetRecord[] = [workshop, lighthouse, changed]
   const grok = new Grok(registry);
   const catalog = createAtomValueTap(GVID_ASSET_CATALOG, { initial });
   grok.registerTap(catalog);
+  const library = createAtomValueTap(GVID_LIBRARY_VIEW, { initial: emptyLibrary() });
+  grok.registerTap(library);
   const source = grok.mainPresentationContext.getOrCreateMatchingContext('assets-1');
   const second = grok.mainPresentationContext.getOrCreateMatchingContext('assets-2');
   const selected = new AssetSelectionTabTap();
@@ -37,7 +40,7 @@ function setup(initial: readonly AssetRecord[] = [workshop, lighthouse, changed]
   source.getGripHomeContext().registerTap(query);
   second.getGripHomeContext().registerTap(selectedSecond);
   second.getGripHomeContext().registerTap(querySecond);
-  return { grok, catalog, source, second, selected, selectedSecond, query, querySecond };
+  return { grok, catalog, library, source, second, selected, selectedSecond, query, querySecond };
 }
 
 describe('assets tab', () => {
@@ -55,12 +58,15 @@ describe('assets tab', () => {
     const markup = renderToStaticMarkup(
       <GripProvider grok={grok} context={source}><Assets tabId="assets-1" /></GripProvider>,
     );
-    expect(markup).not.toContain('Original file unavailable');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).not.toContain('placeholder="Search assets"');
+    expect(markup).toContain('repeat(4, minmax(0, 1fr))');
+    expect(markup).toContain('Original file unavailable');
     expect(markup).toContain('Selected source</span><strong title="Workshop">Workshop');
   });
 
   it('passes selection to a wired child context and repairs removed assets', async () => {
-    const { grok, source, catalog, selected } = setup();
+    const { grok, source, catalog, library, selected } = setup();
     const viewer = grok.mainPresentationContext.getOrCreateMatchingContext('source-viewer');
     const viewerHome = viewer.getGripHomeContext();
     const sourceHome = source.getGripHomeContext();
@@ -72,6 +78,10 @@ describe('assets tab', () => {
     await expect.poll(() => inherited.get()).toBe(workshop.id);
     selected.set('unknown');
     expect(selected.get()).toBe(workshop.id);
+    library.set(removeAsset(library.get(), workshop.id));
+    await expect.poll(() => selected.get()).toBe(lighthouse.id);
+    selected.set(workshop.id);
+    expect(selected.get()).toBe(lighthouse.id);
     catalog.set([lighthouse, changed]);
     await expect.poll(() => selected.get()).toBe(lighthouse.id);
     await expect.poll(() => inherited.get()).toBe(lighthouse.id);
@@ -100,5 +110,21 @@ describe('assets tab', () => {
     expect(markup).not.toContain('vv1');
     expect(markup).toContain('640 x 360');
     expect(markup).toContain('aria-pressed="true"');
+  });
+
+  it('ignores stale folder and search settings after a project session switch', () => {
+    const { grok, source, library, query } = setup();
+    library.set(emptyLibrary('new-session'));
+    query.set('light');
+    source.getGripHomeContext().registerTap(createAtomValueTap(GVID_LIBRARY_UI, { initial: {
+      sessionId: 'old-session', folderId: 'folder-1', searchOpen: true, columns: 2,
+      creating: false, draftName: '', error: '', pendingDelete: null,
+    } }));
+    const markup = renderToStaticMarkup(
+      <GripProvider grok={grok} context={source}><Assets tabId="assets-1" /></GripProvider>,
+    );
+    expect(markup).not.toContain('placeholder="Search assets"');
+    expect(markup).toContain('repeat(4, minmax(0, 1fr))');
+    expect(markup).toContain('3 assets');
   });
 });

@@ -15,6 +15,16 @@ import {
 } from '@gvidjs/contracts';
 
 const RATE = Object.freeze({ num: 24, den: 1 });
+const EXTRA_ASSETS = [
+  { id: 'atrium-walkthrough', name: 'Atrium Walkthrough', frames: 144, hasAudio: true },
+  { id: 'harbor-crane', name: 'Harbor Crane', frames: 72, hasAudio: false },
+  { id: 'interview-close-up', name: 'Interview Close-up', frames: 240, hasAudio: true },
+  { id: 'market-exterior', name: 'Market Exterior', frames: 180, hasAudio: true },
+  { id: 'product-turntable', name: 'Product Turntable', frames: 36, hasAudio: false },
+  { id: 'rainy-street', name: 'Rainy Street', frames: 360, hasAudio: true },
+  { id: 'studio-detail', name: 'Studio Detail', frames: 24, hasAudio: false },
+  { id: 'train-arrival', name: 'Train Arrival', frames: 96, hasAudio: true },
+] as const;
 const EMPTY_SEQUENCE: SequenceView = Object.freeze({
   id: '', graphId: '', revision: 0, frameRate: RATE, durationFrames: 0, tracks: Object.freeze([]),
 });
@@ -70,9 +80,12 @@ function makeSequence(projectId: string, assets: readonly AssetRecord[]): Sequen
 }
 
 function initialState(projectId: 'mock-a' | 'mock-b'): State {
-  const assets = Object.freeze(projectId === 'mock-a'
-    ? [makeAsset(projectId, 'lighthouse', 'Lighthouse', 120), makeAsset(projectId, 'workshop', 'Workshop', 90)]
-    : [makeAsset(projectId, 'lighthouse', 'Lighthouse B', 120), makeAsset(projectId, 'studio-b', 'Studio B', 90, false)]);
+  const assets = Object.freeze([
+    makeAsset(projectId, 'lighthouse', projectId === 'mock-a' ? 'Lighthouse' : 'Lighthouse B', 120),
+    projectId === 'mock-a' ? makeAsset(projectId, 'workshop', 'Workshop', 90) :
+      makeAsset(projectId, 'studio-b', 'Studio B', 90, false),
+    ...EXTRA_ASSETS.map((item) => makeAsset(projectId, item.id, item.name, item.frames, item.hasAudio)),
+  ]);
   const seq = makeSequence(projectId, assets);
   const binding: BindingView = Object.freeze({
     bindingSetId: `${projectId}/bindings`, revision: 1,

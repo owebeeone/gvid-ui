@@ -11,6 +11,7 @@ import { grok, main, PluginRegistryTap } from '@grythjs/plugin-api';
 import { registerDesktopTaps } from '@grythjs/desktop';
 import { registerSettingsTaps } from '@grythjs/plugin-settings';
 import { registerMockTaps } from '@gvidjs/editor-core';
+import { registerLibraryTaps } from '@gvidjs/plugin-assets/library';
 import { createMockFrameProvider } from '@gvidjs/mock-media';
 import { GVID_FRAME_PROVIDER, GVID_SOURCE_DRAG, GVID_SOURCE_DRAG_TAP,
   GVID_TIMELINE_CLIP_DRAG, GVID_TIMELINE_CLIP_DRAG_TAP,
@@ -27,6 +28,7 @@ grok.registerTap(createAtomValueTap(GVID_TIMELINE_DROP_PREVIEW, { initial: null,
 grok.registerTap(createAtomValueTap(GVID_TIMELINE_TRIM_DRAFT, { initial: null, handleGrip: GVID_TIMELINE_TRIM_DRAFT_TAP }));
 registerSettingsTaps(grok);
 registerMockTaps(grok);
+registerLibraryTaps(grok);
 registerDesktopTaps(grok, GVID_DESK);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

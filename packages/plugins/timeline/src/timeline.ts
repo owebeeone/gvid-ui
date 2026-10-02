@@ -74,23 +74,16 @@ export function snapTimelineFrame(sequence: SequenceView, frame: number, options
 
 export function clipBoundaryFrame(sequence: SequenceView, frame: number, direction: 'up' | 'down'): number {
   if (boundedFrame(frame, sequence.durationFrames) === null) return frame;
-  let current: SequenceClip | null = null;
-  const videoTracks = sequence.tracks.filter((track) => track.kind === 'video');
-  for (let index = videoTracks.length - 1; index >= 0; index--) {
-    current = videoTracks[index].clips.find((clip) => clip.timelineIn <= frame && frame < clip.timelineOut) ?? null;
-    if (current) break;
-  }
-  const edge = current && (direction === 'up' ? current.timelineIn : current.timelineOut - 1);
-  if (edge !== null && edge !== frame) return edge;
-  let next = frame;
-  for (const track of videoTracks) {
+  let nearest = frame;
+  for (const track of sequence.tracks) {
     for (const clip of track.clips) {
-      const candidate = direction === 'up' ? clip.timelineOut - 1 : clip.timelineIn;
-      if (direction === 'up' && candidate < frame && (next === frame || candidate > next)) next = candidate;
-      if (direction === 'down' && candidate > frame && (next === frame || candidate < next)) next = candidate;
+      for (const candidate of [clip.timelineIn, clip.timelineOut - 1]) {
+        if (direction === 'up' && candidate < frame && (nearest === frame || candidate > nearest)) nearest = candidate;
+        if (direction === 'down' && candidate > frame && (nearest === frame || candidate < nearest)) nearest = candidate;
+      }
     }
   }
-  return next;
+  return nearest;
 }
 
 export function projectDropPreview(

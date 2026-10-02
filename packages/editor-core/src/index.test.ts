@@ -108,6 +108,7 @@ describe('mock editor root Grips', () => {
     expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1', 'a1']);
     expectLinkedPair(get, 1);
     get(GVID_PROJECT_CONTROL).open('mock-b');
+    expect(get(GVID_ASSET_CATALOG)).toHaveLength(10);
     expect(get(GVID_ASSET_CATALOG).find((asset) => asset.id === 'studio-b')?.hasAudio).toBe(false);
     expectLinkedPair(get, 1);
     await get(GVID_EDIT_COMMAND).place(placeIntent(target(96), { assetId: 'studio-b' }));
@@ -378,14 +379,25 @@ describe('mock editor root Grips', () => {
       ['lighthouse', 12, 60, 0, 48], ['workshop', 5, 53, 48, 96],
     ]);
     expect(graph.sequence.tracks[0]).toMatchObject({ id: 'v1', locked: false });
-    expect(get(GVID_ASSET_CATALOG)).toMatchObject([
+    const catalog = get(GVID_ASSET_CATALOG);
+    expect(catalog).toHaveLength(10);
+    expect(new Set(catalog.map((asset) => asset.id)).size).toBe(10);
+    expect(catalog.slice(0, 2)).toMatchObject([
       { id: 'lighthouse', displayName: 'Lighthouse', version: 'v1', frameCount: 120, width: 640, height: 360 },
       { id: 'workshop', displayName: 'Workshop', version: 'v1', frameCount: 90, width: 640, height: 360 },
+    ]);
+    expect(catalog.slice(2).map((asset) => asset.id)).toEqual([
+      'atrium-walkthrough', 'harbor-crane', 'interview-close-up', 'market-exterior',
+      'product-turntable', 'rainy-street', 'studio-detail', 'train-arrival',
+    ]);
+    expect(catalog.filter((asset) => !asset.hasAudio).map((asset) => asset.id)).toEqual([
+      'harbor-crane', 'product-turntable', 'studio-detail',
     ]);
     expect(get(GVID_BINDING_VIEW)).toMatchObject({
       bindingSetId: 'mock-a/bindings', revision: 1,
       byAssetId: { lighthouse: 'lighthouse/video-0', workshop: 'workshop/video-0' },
     });
+    expect(Object.keys(get(GVID_BINDING_VIEW).byAssetId)).toHaveLength(10);
     expect(get(GVID_HISTORY_VIEW)).toMatchObject({ revision: 1, canUndo: false, canRedo: false });
     expect(get(GVID_EDIT_RESULT)).toBeNull();
     const owned = [
