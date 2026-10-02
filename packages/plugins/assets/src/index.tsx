@@ -1,4 +1,4 @@
-import { addEntry } from '@grythjs/plugin-api';
+import { addEntry, DESKTOP_OPEN_WIRED } from '@grythjs/plugin-api';
 import { createAtomValueTap, useGrip } from '@owebeeone/grip-react';
 import {
   GVID_ASSETS_PLUGIN, GVID_ASSET_CATALOG, GVID_ASSET_QUERY, GVID_ASSET_QUERY_TAP,
@@ -8,10 +8,11 @@ import { frameRate, visibleAssets } from './catalog';
 import { AssetSelectionTabTap } from './selection';
 import './assets.css';
 
-export function Assets() {
+export function Assets({ tabId }: { tabId: string }) {
   const catalog = useGrip(GVID_ASSET_CATALOG) ?? [];
   const selectedId = useGrip(GVID_DEST_ASSET_ID) ?? null;
   const selectionTap = useGrip(GVID_DEST_ASSET_ID_TAP);
+  const openWired = useGrip(DESKTOP_OPEN_WIRED);
   const query = useGrip(GVID_ASSET_QUERY) ?? '';
   const queryTap = useGrip(GVID_ASSET_QUERY_TAP);
   const visible = visibleAssets(catalog, query);
@@ -41,7 +42,10 @@ export function Assets() {
             type="button"
             className="gvid-asset-row"
             aria-pressed={asset.id === selectedId}
-            onClick={() => selectionTap?.set(asset.id)}
+            onClick={() => {
+              selectionTap?.set(asset.id);
+              openWired?.(tabId, { toolId: GVID_TOOLS.source });
+            }}
           >
             <span className="gvid-asset-monogram" aria-hidden="true">{asset.displayName.slice(0, 1).toUpperCase()}</span>
             <span className="gvid-asset-details">

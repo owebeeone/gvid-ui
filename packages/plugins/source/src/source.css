@@ -49,12 +49,14 @@
   background: #202729;
   color: #dde7e3;
 }
+.gvid-source-surface[draggable='true'] { cursor: grab; }
+.gvid-source-surface[draggable='true']:active { cursor: grabbing; }
 
-.gvid-source-surface img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.gvid-source-surface img { display: block; height: 100%; inset: 0; object-fit: contain; position: absolute; width: 100%; }
 .gvid-source-status {
   position: absolute;
   bottom: 6px;
-  left: 8px;
+  right: 8px;
   display: flex;
   gap: 8px;
   max-width: calc(100% - 16px);
@@ -70,7 +72,15 @@
 .gvid-source-transport { flex-wrap: wrap; }
 .gvid-source-counter { margin-left: auto; font-variant-numeric: tabular-nums; }
 .gvid-source-counter span { color: #637373; }
-.gvid-source-controls input[type='range'] { width: 100%; accent-color: #167b71; }
+.gvid-source-scrubber { height: 24px; position: relative; }
+.gvid-source-scrubber-track { background: #cbd9d6; border-radius: 3px; height: 9px; left: 2px; overflow: visible; position: absolute; right: 2px; top: 8px; }
+.gvid-source-range-selected { background: #32b19a; border-radius: 2px; height: 100%; position: absolute; top: 0; }
+.gvid-source-range-edge { background: #0e6e65; bottom: -4px; position: absolute; top: -4px; width: 2px; z-index: 1; }
+.gvid-source-scrubber input[type='range'] { appearance: none; background: transparent; height: 24px; margin: 0; position: absolute; width: 100%; }
+.gvid-source-scrubber input[type='range']::-webkit-slider-runnable-track { background: transparent; height: 9px; }
+.gvid-source-scrubber input[type='range']::-webkit-slider-thumb { appearance: none; background: #fff; border: 2px solid #126f67; border-radius: 50%; height: 16px; margin-top: -4px; width: 16px; }
+.gvid-source-scrubber input[type='range']::-moz-range-track { background: transparent; height: 9px; }
+.gvid-source-scrubber input[type='range']::-moz-range-thumb { background: #fff; border: 2px solid #126f67; border-radius: 50%; height: 13px; width: 13px; }
 .gvid-source-marks { flex-wrap: wrap; }
 .gvid-source-marks span { margin-left: auto; font-variant-numeric: tabular-nums; }
 .gvid-source-reason { margin: 0; color: #a14e28; }

@@ -68,7 +68,7 @@ export function SequenceViewer({ tabId }: { tabId: string }) {
       <strong>{state}</strong>
       <span>Frame {frame ?? '--'}</span>
       <span>{presentation?.fidelity ?? '--'} fidelity</span>
-      {presentation?.composition === 'mock-single-track' && <span>Mock single track</span>}
+      {presentation?.composition === 'mock-topmost-track' && <span>Mock topmost track</span>}
       {presentation?.reason && state !== 'gap' && <span title={presentation.reason}>{presentation.reason}</span>}
     </div>
     <div className="gvid-sequence-identity">

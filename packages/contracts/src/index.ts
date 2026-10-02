@@ -139,9 +139,64 @@ export interface InsertSourceSpan {
   target: InsertTarget;
 }
 
+export interface TimelineEditScope {
+  projectId: string;
+  sessionId: string;
+  expectedRevision: number;
+  sequenceId: string;
+}
+
+export interface DeleteTrack extends TimelineEditScope {
+  trackId: string;
+}
+
+export interface PlaceSourceSpan extends InsertSourceSpan, TimelineEditScope {}
+
+export interface MoveTimelineClip extends TimelineEditScope {
+  sourceTrackId: string;
+  clipId: string;
+  target: InsertTarget;
+}
+
+export interface TrimTimelineClip extends TimelineEditScope {
+  trackId: string;
+  clipId: string;
+  edge: 'in' | 'out';
+  frame: number;
+}
+
 export interface EditorControl {
   insert(intent: InsertSourceSpan): Promise<EditorResult>;
+  place(intent: PlaceSourceSpan): Promise<EditorResult>;
+  addTrack(intent: TimelineEditScope): Promise<EditorResult>;
+  deleteTrack(intent: DeleteTrack): Promise<EditorResult>;
+  moveClip(intent: MoveTimelineClip): Promise<EditorResult>;
+  trimClip(intent: TrimTimelineClip): Promise<EditorResult>;
 }
+
+export interface SourceDragSpan {
+  projectId: string;
+  sessionId: string;
+  assetId: string;
+  assetVersion: string;
+  sourceIn: number;
+  sourceOut: number;
+  viewerId: string;
+}
+
+export const GVID_SOURCE_DRAG_MIME = 'application/x-gvid-source-span';
+
+export interface TimelineClipDrag extends TimelineEditScope {
+  sourceTrackId: string;
+  clipId: string;
+  grabOffsetFrames: number;
+}
+
+export interface TimelineTrimDraft extends TrimTimelineClip {
+  pointerId: number;
+}
+
+export const GVID_TIMELINE_CLIP_DRAG_MIME = 'application/x-gvid-timeline-clip';
 
 export interface HistoryView {
   revision: number;
@@ -268,7 +323,7 @@ export interface FrameResult<K> {
   fidelity: 'mock' | 'proxy' | 'exact';
   resource?: FrameResource;
   diagnostic?: Diagnostic;
-  composition?: 'mock-single-track' | 'composite';
+  composition?: 'mock-single-track' | 'mock-topmost-track' | 'composite';
 }
 
 export interface FramePresentation<K> {
@@ -278,7 +333,7 @@ export interface FramePresentation<K> {
   resource?: FrameResource;
   fidelity?: 'mock' | 'proxy' | 'exact';
   reason?: string;
-  composition?: 'mock-single-track' | 'composite';
+  composition?: 'mock-single-track' | 'mock-topmost-track' | 'composite';
 }
 
 export interface FrameProvider {
@@ -303,6 +358,12 @@ export const GVID_SEQUENCE_VIEW = defineGrip<SequenceView>('Gvid.Sequence.View')
 
 export const GVID_DEST_ASSET_ID = defineGrip<string | null>('Gvid.Dest.AssetId', null);
 export const GVID_DEST_ASSET_ID_TAP = defineGrip<AtomTapHandle<string | null>>('Gvid.Dest.AssetId.Tap');
+export const GVID_SOURCE_DRAG = defineGrip<SourceDragSpan | null>('Gvid.Source.Drag', null);
+export const GVID_SOURCE_DRAG_TAP = defineGrip<AtomTapHandle<SourceDragSpan | null>>('Gvid.Source.Drag.Tap');
+export const GVID_TIMELINE_CLIP_DRAG = defineGrip<TimelineClipDrag | null>('Gvid.Timeline.ClipDrag', null);
+export const GVID_TIMELINE_CLIP_DRAG_TAP = defineGrip<AtomTapHandle<TimelineClipDrag | null>>('Gvid.Timeline.ClipDrag.Tap');
+export const GVID_TIMELINE_TRIM_DRAFT = defineGrip<TimelineTrimDraft | null>('Gvid.Timeline.TrimDraft', null);
+export const GVID_TIMELINE_TRIM_DRAFT_TAP = defineGrip<AtomTapHandle<TimelineTrimDraft | null>>('Gvid.Timeline.TrimDraft.Tap');
 export const GVID_ASSET_QUERY = defineGrip<string>('Gvid.Asset.Query', '');
 export const GVID_ASSET_QUERY_TAP = defineGrip<AtomTapHandle<string>>('Gvid.Asset.Query.Tap');
 export const GVID_DEST_SEQUENCE_ID = defineGrip<string | null>('Gvid.Dest.SequenceId', null);

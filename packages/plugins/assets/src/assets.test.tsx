@@ -53,7 +53,7 @@ describe('assets tab', () => {
     expect(selectedSecond.get()).toBe(lighthouse.id);
     expect(source.getGripHomeContext()).not.toBe(second.getGripHomeContext());
     const markup = renderToStaticMarkup(
-      <GripProvider grok={grok} context={source}><Assets /></GripProvider>,
+      <GripProvider grok={grok} context={source}><Assets tabId="assets-1" /></GripProvider>,
     );
     expect(markup).not.toContain('Original file unavailable');
     expect(markup).toContain('Selected source</span><strong title="Workshop">Workshop');
@@ -91,7 +91,7 @@ describe('assets tab', () => {
     catalog.set([lighthouse, workshop, changed]);
     await expect.poll(() => selection.get()).toBe(workshop.id);
     const markup = renderToStaticMarkup(
-      <GripProvider grok={grok} context={source}><Assets /></GripProvider>,
+      <GripProvider grok={grok} context={source}><Assets tabId="seeded-assets" /></GripProvider>,
     );
     expect(markup).toContain('Original file unavailable');
     expect(markup).toContain('Fingerprint changed');

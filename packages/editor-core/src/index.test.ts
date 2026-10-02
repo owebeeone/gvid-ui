@@ -6,7 +6,7 @@ import {
   GVID_BINDING_VIEW, GVID_CHANGE_STATUS, GVID_DEST_PROJECT_ID, GVID_EDIT_COMMAND,
   GVID_EDIT_RESULT, GVID_GRAPH_VIEW, GVID_HISTORY_CONTROL, GVID_HISTORY_VIEW,
   GVID_PROJECT_CONTROL, GVID_PROJECT_VIEW, GVID_SEQUENCE_VIEW,
-  type InsertSourceSpan, type InsertTarget,
+  type InsertSourceSpan, type InsertTarget, type PlaceSourceSpan, type TimelineEditScope,
 } from '@gvidjs/contracts';
 import { registerMockTaps } from './index';
 
@@ -39,7 +39,15 @@ function setup(withLinks = true) {
       target: selection, ...overrides,
     };
   };
-  return { grok, get, target, intent, links };
+  const scope = (): TimelineEditScope => {
+    const project = get(GVID_PROJECT_VIEW);
+    return { projectId: project.projectId!, sessionId: project.sessionId,
+      expectedRevision: project.revision, sequenceId: get(GVID_SEQUENCE_VIEW).id };
+  };
+  const placeIntent = (selection: InsertTarget, overrides: Partial<PlaceSourceSpan> = {}): PlaceSourceSpan => ({
+    ...intent(selection), ...scope(), ...overrides,
+  });
+  return { grok, get, target, intent, scope, placeIntent, links };
 }
 
 function ranges(clips: readonly { assetId: string; sourceIn: number; sourceOut: number; timelineIn: number; timelineOut: number }[]) {
@@ -48,6 +56,117 @@ function ranges(clips: readonly { assetId: string; sourceIn: number; sourceOut: 
 }
 
 describe('mock editor root Grips', () => {
+  it('adds and deletes tracks with their clips as undoable sequence snapshots', async () => {
+    const { get, scope, target, placeIntent } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const history = get(GVID_HISTORY_CONTROL);
+    expect((await edit.deleteTrack({ ...scope(), trackId: 'v1' })).status).toBe('rejected');
+    expect((await edit.addTrack(scope())).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1', 'v2']);
+    expect((await edit.place(placeIntent({ ...target(12), trackId: 'v2' }))).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[1].clips).toHaveLength(1);
+    expect((await edit.deleteTrack({ ...scope(), trackId: 'v2' })).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1']);
+    expect(get(GVID_HISTORY_VIEW).undoLabel).toBe('Delete track');
+    expect((await history.undo()).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[1].clips).toHaveLength(1);
+    expect((await history.redo()).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1']);
+  });
+
+  it('places at the drop frame and auto-adds a track only on overlap', async () => {
+    const { get, target, placeIntent } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    expect((await edit.place(placeIntent(target(96)))).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(1);
+    expect(ranges(get(GVID_SEQUENCE_VIEW).tracks[0].clips).at(-1)).toEqual(['workshop', 0, 24, 96, 120]);
+    expect((await edit.place(placeIntent(target(24), { sourceIn: 8, sourceOut: 20 }))).status).toBe('accepted-session-only');
+    const seq = get(GVID_SEQUENCE_VIEW);
+    expect(seq.tracks).toHaveLength(2);
+    expect(ranges(seq.tracks[1].clips)).toEqual([['workshop', 8, 20, 24, 36]]);
+    expect(seq.durationFrames).toBe(120);
+    expect((await get(GVID_HISTORY_CONTROL).undo()).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(1);
+  });
+
+  it('moves clips within and between tracks, raises overlaps, and undoes the move', async () => {
+    const { get, scope } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const history = get(GVID_HISTORY_CONTROL);
+    const base = get(GVID_SEQUENCE_VIEW);
+    const clipId = base.tracks[0].clips[0].id;
+    const target = (trackId: string, frame: number): InsertTarget => ({
+      projectId: scope().projectId, graphId: get(GVID_GRAPH_VIEW).graphId,
+      sequenceId: base.id, trackId, frame, ownerTabId: 'timeline-1',
+    });
+    expect((await edit.moveClip({ ...scope(), sourceTrackId: 'v1', clipId,
+      target: target('v1', 48) })).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(2);
+    expect(get(GVID_SEQUENCE_VIEW).tracks[1].clips[0]).toMatchObject({ id: clipId, timelineIn: 48, timelineOut: 96 });
+    expect((await history.undo()).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(1);
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0]).toMatchObject({ id: clipId, timelineIn: 0 });
+    expect((await edit.addTrack(scope())).status).toBe('accepted-session-only');
+    expect((await edit.moveClip({ ...scope(), sourceTrackId: 'v1', clipId,
+      target: target('v2', 72) })).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[1].clips[0]).toMatchObject({ id: clipId, timelineIn: 72, timelineOut: 120 });
+    expect((await edit.moveClip({ ...scope(), sourceTrackId: 'v2', clipId: 'missing',
+      target: target('v1', 0) })).status).toBe('rejected');
+  });
+
+  it('trims both clip edges against source and neighbors, with undo and stale-scope checks', async () => {
+    const { get, scope } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const history = get(GVID_HISTORY_CONTROL);
+    const trim = (clipId: string, edge: 'in' | 'out', frame: number) =>
+      edit.trimClip({ ...scope(), trackId: 'v1', clipId, edge, frame });
+    expect((await trim('clip-a', 'out', 40)).status).toBe('accepted-session-only');
+    expect(ranges(get(GVID_SEQUENCE_VIEW).tracks[0].clips)).toEqual([
+      ['lighthouse', 12, 52, 0, 40], ['workshop', 5, 53, 48, 96],
+    ]);
+    expect((await trim('clip-a', 'out', 49)).status).toBe('rejected');
+    expect((await trim('clip-a', 'out', 48)).status).toBe('accepted-session-only');
+    expect((await trim('clip-b', 'in', 53)).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[1]).toMatchObject({ sourceIn: 10, timelineIn: 53 });
+    expect((await trim('clip-b', 'in', 47)).status).toBe('rejected');
+    expect((await trim('clip-b', 'in', 48)).status).toBe('accepted-session-only');
+    expect((await trim('clip-b', 'out', 134)).status).toBe('rejected');
+    expect((await trim('clip-b', 'out', 133)).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[1]).toMatchObject({ sourceOut: 90, timelineOut: 133 });
+    expect(get(GVID_SEQUENCE_VIEW).durationFrames).toBe(133);
+    expect((await history.undo()).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[1]).toMatchObject({ sourceOut: 53, timelineOut: 96 });
+    expect((await edit.trimClip({ ...scope(), expectedRevision: 1, trackId: 'v1',
+      clipId: 'clip-a', edge: 'out', frame: 30 })).status).toBe('rejected');
+  });
+
+  it('rejects stale, invalid and foreign drop edits', async () => {
+    const { get, scope, target, placeIntent } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const original = get(GVID_GRAPH_VIEW);
+    for (const intent of [
+      placeIntent(target(10), { sessionId: 'old' }),
+      placeIntent(target(10), { sourceIn: 20, sourceOut: 20 }),
+      placeIntent(target(10), { target: { ...target(10), ownerTabId: 'other' } }),
+      placeIntent(target(10), { target: { ...target(10), trackId: 'missing' } }),
+    ]) expect((await edit.place(intent)).status).toBe('rejected');
+    expect((await edit.addTrack({ ...scope(), expectedRevision: 0 })).status).toBe('rejected');
+    expect(get(GVID_GRAPH_VIEW)).toBe(original);
+    expect(get(GVID_HISTORY_VIEW).canUndo).toBe(false);
+  });
+
+  it('ripples every track after multi-track placement', async () => {
+    const { get, target, placeIntent, intent } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    await edit.place(placeIntent(target(20), { sourceIn: 0, sourceOut: 24 }));
+    const at24 = target(24);
+    get(GVID_ACTIVE_INSERT_TARGET_CONTROL).set(at24);
+    expect((await edit.insert(intent(at24))).status).toBe('accepted-session-only');
+    expect(ranges(get(GVID_SEQUENCE_VIEW).tracks[1].clips)).toEqual([
+      ['workshop', 0, 4, 20, 24], ['workshop', 4, 24, 48, 68],
+    ]);
+  });
+
   it('publishes the named session-only fixture and a single root producer per owned Grip', () => {
     const { grok, get } = setup();
     const project = get(GVID_PROJECT_VIEW);

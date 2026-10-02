@@ -74,6 +74,14 @@ function markView(inFrame: number | null, outFrame: number | null, count: number
   return { inFrame, outFrame, validity: 'valid' };
 }
 
+export function sourceSpanFromMarks(marks: FrameMarks | undefined, frameCount: number): { sourceIn: number; sourceOut: number } | null {
+  if (!integer(frameCount) || frameCount <= 0 || marks?.validity === 'invalid') return null;
+  const sourceIn = marks?.inFrame ?? 0;
+  const sourceOut = marks?.outFrame ?? frameCount;
+  return integer(sourceIn) && integer(sourceOut) && sourceIn >= 0 && sourceIn < sourceOut &&
+    sourceOut <= frameCount ? { sourceIn, sourceOut } : null;
+}
+
 function sameKey(a: SourceFrameKey, b: SourceFrameKey): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
@@ -124,6 +132,7 @@ export class SourceTabTap extends BaseTap implements TransportControl, MarksCont
   }
 
   onAttach(home: GripContext | GripContextLike): void {
+    this.detached = false;
     super.onAttach(home);
     const params = this.getParamsContext();
     if (params) {
@@ -137,6 +146,10 @@ export class SourceTabTap extends BaseTap implements TransportControl, MarksCont
     this.stopClock();
     this.cancelRequest();
     this.releaseDisplayed();
+    this.requestCore = '';
+    this.requestedProvider = undefined;
+    this.result = null;
+    this.presentation = { state: 'empty', requestedFrame: null };
     super.onDetach();
   }
 

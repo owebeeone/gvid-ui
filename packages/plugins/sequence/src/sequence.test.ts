@@ -9,7 +9,7 @@ import {
   type AssetRecord, type BindingView, type FrameProvider, type FrameResult,
   type GraphView, type ProjectView, type SequenceFrameKey, type SequenceView,
 } from '@gvidjs/contracts';
-import { resolveSequenceDestination, sequencePresentation, sequenceTabTaps } from './taps';
+import { resolveSequenceDestination, sequencePresentation, sequenceTabTaps, topmostClipAt } from './taps';
 
 const clips = [
   { id: 'a', assetId: 'lighthouse', sourceIn: 12, sourceOut: 60, timelineIn: 0, timelineOut: 48 },
@@ -36,6 +36,16 @@ const links = [
 ];
 
 describe('sequence destination', () => {
+  it('previews the highest occupied track at an overlap and falls through gaps', () => {
+    const layered: SequenceView = { ...sequence, tracks: [...sequence.tracks,
+      { id: 'v2', label: 'V2', kind: 'video', locked: false, clips: [
+        { id: 'top', assetId: 'workshop', sourceIn: 0, sourceOut: 20, timelineIn: 10, timelineOut: 30 },
+      ] },
+    ] };
+    expect(topmostClipAt(layered, 15)?.id).toBe('top');
+    expect(topmostClipAt(layered, 5)?.id).toBe('a');
+    expect(topmostClipAt(layered, 99)).toBeNull();
+  });
   it('follows a named timeline, validates standalone frames, and rejects a missing parent', () => {
     expect(resolveSequenceDestination('viewer', {
       tabId: 'viewer', sourceTabId: 'timeline', params: { timelineFrame: 88 },
@@ -64,11 +74,11 @@ describe('sequence destination', () => {
       bindingSetId: 'bind-a', bindingRevision: 1, timelineFrame: 48,
     };
     const ready: FrameResult<SequenceFrameKey> = {
-      key, state: 'ready', fidelity: 'mock', composition: 'mock-single-track',
+      key, state: 'ready', fidelity: 'mock', composition: 'mock-topmost-track',
       resource: { kind: 'mock-png', leaseId: 'lease', objectUrl: 'blob:frame' },
     };
     expect(sequencePresentation(destination, project, graph, binding, { state: 'live' }, ready))
-      .toMatchObject({ state: 'current', composition: 'mock-single-track' });
+      .toMatchObject({ state: 'current', composition: 'mock-topmost-track' });
     expect(sequencePresentation(destination, project, graph, binding, { state: 'stale', reason: 'replay gap' }, ready))
       .toMatchObject({ state: 'stale', reason: 'replay gap' });
     expect(sequencePresentation(destination, project, graph, { ...binding, revision: 2 }, { state: 'live' }, ready).state)
@@ -143,7 +153,7 @@ describe('sequence request lifecycle', () => {
     expect(resultDrip.get()?.key.timelineFrame).toBe(48);
 
     calls[1].resolve({ key: calls[1].key, state: 'ready', fidelity: 'mock',
-      composition: 'mock-single-track', resource: { kind: 'mock-png', leaseId: 'current', objectUrl: 'blob:current' } });
+      composition: 'mock-topmost-track', resource: { kind: 'mock-png', leaseId: 'current', objectUrl: 'blob:current' } });
     await expect.poll(() => presentationDrip.get()?.state).toBe('current');
     expect(presentationDrip.get()?.resource).toMatchObject({ leaseId: 'current' });
 
@@ -182,7 +192,7 @@ describe('sequence request lifecycle', () => {
     expect(destinationDrip.get()).toMatchObject({ mode: 'standalone', timelineFrame: 96 });
     expect(calls[4].clipId).toBeNull();
     expect(provider.release).toHaveBeenCalledWith('project-b');
-    calls[4].resolve({ key: calls[4].key, state: 'gap', fidelity: 'mock', composition: 'mock-single-track' });
+    calls[4].resolve({ key: calls[4].key, state: 'gap', fidelity: 'mock', composition: 'mock-topmost-track' });
     await expect.poll(() => presentationDrip.get()?.state).toBe('gap');
 
     linkTap.set([{ ...links[0] }, { ...links[1], sourceTabId: 'gone' }]);

@@ -6,7 +6,7 @@ import {
   GVID_TIMELINE_TRANSPORT, type ChangeStatus, type GraphView, type ProjectView,
   type SequenceView,
 } from '@gvidjs/contracts';
-import { boundedFrame, markState, TimelineTabTap } from './timeline';
+import { boundedFrame, frameFromTimelineX, markState, TimelineTabTap } from './timeline';
 
 const sequence: SequenceView = {
   id: 'main', graphId: 'graph-a', revision: 1, frameRate: { num: 24, den: 1 },
@@ -44,6 +44,17 @@ function setup(initialSequence: SequenceView = sequence) {
 afterEach(() => vi.useRealTimers());
 
 describe('timeline tab transport', () => {
+  it('snaps clicks and drops to the nearest frame line, with ties biased left', () => {
+    expect(frameFromTimelineX(139.9, 100, 0, 8)).toBe(5);
+    expect(frameFromTimelineX(140, 100, 0, 8)).toBe(5);
+    expect(frameFromTimelineX(136, 100, 0, 8)).toBe(4);
+    expect(frameFromTimelineX(136.01, 100, 0, 8)).toBe(5);
+    expect(frameFromTimelineX(139.9, 100, 20, 8)).toBe(25);
+    expect(frameFromTimelineX(119.9, 100, 20, 4)).toBe(25);
+    expect(frameFromTimelineX(80, 100, 20, 8)).toBe(17);
+    expect(frameFromTimelineX(80, 100, 0, 8)).toBe(0);
+  });
+
   it('keeps exact pending, valid and invalid half-open marks', () => {
     expect(boundedFrame(8, 8)).toBeNull();
     expect(markState(null, null, 8).validity).toBe('unset');
@@ -52,6 +63,18 @@ describe('timeline tab transport', () => {
     expect(markState(2, 8, 8).validity).toBe('valid');
     expect(markState(2, 2, 8).validity).toBe('invalid');
     expect(markState(2, 9, 8).validity).toBe('invalid');
+  });
+
+  it('keeps timeline marks when selecting a different clip on the sequence', () => {
+    const { tap, read } = setup();
+    tap.transportControl.seek(1);
+    tap.marksControl.setIn();
+    tap.transportControl.seek(6);
+    tap.marksControl.setOut();
+    tap.selectionHandle.set({ trackId: 'v1', clipId: 'a' });
+    tap.selectionHandle.set({ trackId: 'v1', clipId: 'b' });
+    expect(read(GVID_TIMELINE_MARKS)).toMatchObject({ inFrame: 1, outFrame: 7, validity: 'valid' });
+    expect(read(GVID_TIMELINE_SELECTION)).toMatchObject({ trackId: 'v1', clipId: 'b' });
   });
 
   it('starts at In when outside and pauses without showing Out', () => {

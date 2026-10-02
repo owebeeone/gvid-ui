@@ -10,7 +10,7 @@ import {
   type AssetRecord, type EditorControl, type FrameProvider, type FrameResult,
   type InsertSourceSpan, type ProjectView, type SourceFrameKey,
 } from '@gvidjs/contracts';
-import { SOURCE_INSERT_STATE, SourceTabTap } from './sourceTap';
+import { SOURCE_INSERT_STATE, SourceTabTap, sourceSpanFromMarks } from './sourceTap';
 
 const lighthouse: AssetRecord = {
   id: 'lighthouse', displayName: 'Lighthouse', version: 'v1', fingerprint: 'light-1',
@@ -56,7 +56,9 @@ function harness(sourceLink: DesktopTabLinkInfo = {
   const insert = vi.fn(async () => ({
     status: 'accepted-session-only' as const, revision: 5, message: 'Inserted', commandId: 'cmd-1',
   }));
-  const command = createAtomValueTap(GVID_EDIT_COMMAND, { initial: { insert } satisfies EditorControl });
+  const command = createAtomValueTap(GVID_EDIT_COMMAND, { initial: {
+    insert, place: vi.fn(), addTrack: vi.fn(), deleteTrack: vi.fn(), moveClip: vi.fn(), trimClip: vi.fn(),
+  } satisfies EditorControl });
   const requests: Array<{
     key: SourceFrameKey; asset: AssetRecord; signal: AbortSignal;
     reply: ReturnType<typeof deferred<FrameResult<SourceFrameKey>>>;
@@ -97,7 +99,7 @@ function harness(sourceLink: DesktopTabLinkInfo = {
   };
   grok.flush();
   return {
-    grok, tap, read, links, projectTap, catalog, binding, change, target,
+    grok, tap, read, sourceCtx, links, projectTap, catalog, binding, change, target,
     sequence, command, selected, requests, release, insert, wire,
     close: () => grok.unregisterTap(tap),
   };
@@ -116,6 +118,44 @@ async function replyReady(h: ReturnType<typeof harness>, index: number, lease = 
 afterEach(() => { vi.useRealTimers(); });
 
 describe('SourceTabTap', () => {
+  it('uses a marked or partial source span, and defaults to the full asset', () => {
+    expect(sourceSpanFromMarks(undefined, 90)).toEqual({ sourceIn: 0, sourceOut: 90 });
+    expect(sourceSpanFromMarks({ inFrame: 12, outFrame: null, validity: 'pending' }, 90))
+      .toEqual({ sourceIn: 12, sourceOut: 90 });
+    expect(sourceSpanFromMarks({ inFrame: null, outFrame: 44, validity: 'pending' }, 90))
+      .toEqual({ sourceIn: 0, sourceOut: 44 });
+    expect(sourceSpanFromMarks({ inFrame: 12, outFrame: 44, validity: 'valid' }, 90))
+      .toEqual({ sourceIn: 12, sourceOut: 44 });
+    expect(sourceSpanFromMarks({ inFrame: 44, outFrame: 12, validity: 'invalid' }, 90)).toBeNull();
+  });
+
+  it('binds source marks to the selected asset rather than the timeline', () => {
+    const h = harness();
+    h.tap.seek(12);
+    h.tap.setIn();
+    h.tap.seek(40);
+    h.tap.setOut();
+    expect(h.read(GVID_SOURCE_MARKS)).toMatchObject({ inFrame: 12, outFrame: 41, validity: 'valid' });
+    h.selected.set('workshop');
+    h.grok.flush();
+    expect(h.read(GVID_SOURCE_DESTINATION)?.assetId).toBe('workshop');
+    expect(h.read(GVID_SOURCE_MARKS)).toMatchObject({ inFrame: null, outFrame: null, validity: 'unset' });
+    h.close();
+  });
+
+  it('resolves the current library asset when the same tap reattaches after a hidden tab', () => {
+    const h = harness();
+    expect(h.read(GVID_SOURCE_DESTINATION)?.assetId).toBe('lighthouse');
+    h.close();
+    expect(h.requests[0].signal.aborted).toBe(true);
+    h.selected.set('workshop');
+    h.grok.registerTapAt(h.sourceCtx, h.tap);
+    h.grok.flush();
+    expect(h.read(GVID_SOURCE_DESTINATION)).toMatchObject({ mode: 'wired', assetId: 'workshop' });
+    expect(h.requests[1].key.assetId).toBe('workshop');
+    h.close();
+  });
+
   it('resolves a library wire attached after the tab tap is created', () => {
     const h = harness(undefined, false);
     expect(h.read(GVID_SOURCE_DESTINATION)?.mode).toBe('unresolved');

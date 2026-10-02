@@ -110,12 +110,12 @@ describe('createMockFrameProvider', () => {
     const signal = new AbortController().signal;
     const key = sequenceKey(5);
     const frame = await provider.sequence(key, clip, asset, signal);
-    expect(frame).toMatchObject({ key, state: 'ready', fidelity: 'mock', composition: 'mock-single-track' });
+    expect(frame).toMatchObject({ key, state: 'ready', fidelity: 'mock', composition: 'mock-topmost-track' });
     expect(encodePng).toHaveBeenCalledExactlyOnceWith({ asset, sourceFrame: 17, width: 640, height: 360 });
     provider.release(resource(frame).leaseId);
     for (const [frameNumber, activeClip] of [[48, clip], [3, null]] as const) {
       const gap = await provider.sequence(sequenceKey(frameNumber), activeClip, null, signal);
-      expect(gap).toMatchObject({ state: 'gap', fidelity: 'mock', composition: 'mock-single-track' });
+      expect(gap).toMatchObject({ state: 'gap', fidelity: 'mock', composition: 'mock-topmost-track' });
       expect(gap.resource).toBeUndefined();
     }
     expect(encodePng).toHaveBeenCalledTimes(1);
@@ -141,7 +141,7 @@ describe('createMockFrameProvider', () => {
     const missing = await provider.sequence(sequenceKey(), clip, null, signal);
     const wrongAsset = await provider.sequence(sequenceKey(), clip, { ...asset, id: 'other' }, signal);
     for (const result of [invalid, missing, wrongAsset]) {
-      expect(result).toMatchObject({ state: 'failed', composition: 'mock-single-track' });
+      expect(result).toMatchObject({ state: 'failed', composition: 'mock-topmost-track' });
       expect(result.resource).toBeUndefined();
     }
   });

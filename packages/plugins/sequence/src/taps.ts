@@ -126,19 +126,25 @@ function requestSnapshot(
     destination.timelineFrame < 0 || destination.timelineFrame >= sequence.durationFrames) return null;
 
   const frame = destination.timelineFrame;
-  const activeClips = sequence.tracks.flatMap((track) => track.clips)
-    .filter((clip) => clip.timelineIn <= frame && frame < clip.timelineOut);
-  const clip = activeClips.length === 1 ? activeClips[0] : null;
+  const clip = topmostClipAt(sequence, frame);
   const asset = clip ? assets?.find((item) => item.id === clip.assetId) ?? null : null;
   const key = {
     viewerId: destination.viewerId, sessionId: project.sessionId, projectId: project.projectId,
     graphId: graph.graphId, sequenceId: sequence.id, revision: graph.revision,
     bindingSetId: binding.bindingSetId, bindingRevision: binding.revision, timelineFrame: frame,
   };
-  const signature = JSON.stringify([key, activeClips.map((item) => item.id), asset && [
+  const signature = JSON.stringify([key, clip?.id, asset && [
     asset.id, asset.version, asset.fingerprint, asset.displayName, asset.status,
   ]]);
   return { key, clip, asset, signature };
+}
+
+export function topmostClipAt(sequence: SequenceView, frame: number): SequenceClip | null {
+  for (let index = sequence.tracks.length - 1; index >= 0; index--) {
+    const clip = sequence.tracks[index].clips.find((item) => item.timelineIn <= frame && frame < item.timelineOut);
+    if (clip) return clip;
+  }
+  return null;
 }
 
 function sameKey(a: SequenceFrameKey, b: SequenceFrameKey): boolean {

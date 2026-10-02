@@ -70,7 +70,7 @@ function validClip(clip: SequenceClip): boolean {
     clip.sourceOut - clip.sourceIn === clip.timelineOut - clip.timelineIn;
 }
 
-function failed<K>(key: K, code: string, message: string, composition?: 'mock-single-track'): FrameResult<K> {
+function failed<K>(key: K, code: string, message: string, composition?: 'mock-topmost-track'): FrameResult<K> {
   return { key, state: 'failed', fidelity: 'mock', composition, diagnostic: { code, message } };
 }
 
@@ -175,7 +175,7 @@ export function createMockFrameProvider(options: MockFrameProviderOptions = {}):
     asset: AssetRecord,
     sourceFrame: number,
     signal: AbortSignal,
-    composition?: 'mock-single-track',
+    composition?: 'mock-topmost-track',
   ): Promise<FrameResult<K>> {
     try {
       const blob = await awaitOrAbort(pixels(projectId, sessionId, asset, sourceFrame), signal);
@@ -219,7 +219,7 @@ export function createMockFrameProvider(options: MockFrameProviderOptions = {}):
     },
     sequence(key, clip, asset, signal) {
       if (signal.aborted) return Promise.reject(abortError());
-      const composition = 'mock-single-track';
+      const composition = 'mock-topmost-track';
       if (!validId(key.requestId) || !validId(key.cancelGroupId) || !validId(key.viewerId) ||
         !validId(key.projectId) || !validId(key.sessionId) || !validId(key.graphId) ||
         !validId(key.sequenceId) || !validId(key.bindingSetId) ||

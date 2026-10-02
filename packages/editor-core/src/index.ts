@@ -7,8 +7,10 @@ import {
   GVID_PROJECT_CONTROL, GVID_PROJECT_VIEW, GVID_SEQUENCE_VIEW, GVID_TOOLS,
   type AssetRecord, type BindingView, type ChangeStatus, type EditorControl,
   type ChangeFootprint, type EditorResult, type GraphView, type HistoryControl, type HistoryView,
-  type InsertSourceSpan, type InsertTarget, type InsertTargetControl, type ProjectControl,
-  type ProjectTransitionResult, type ProjectView, type SequenceClip, type SequenceView,
+  type DeleteTrack, type InsertSourceSpan, type InsertTarget, type InsertTargetControl,
+  type MoveTimelineClip, type PlaceSourceSpan, type ProjectControl, type ProjectTransitionResult, type ProjectView,
+  type SequenceClip, type SequenceTrack, type SequenceView, type TimelineEditScope,
+  type TrimTimelineClip,
 } from '@gvidjs/contracts';
 
 const RATE = Object.freeze({ num: 24, den: 1 });
@@ -108,10 +110,12 @@ function sameTarget(a: InsertTarget, b: InsertTarget): boolean {
 }
 
 function validateSequence(seq: SequenceView, assets: readonly AssetRecord[]): boolean {
-  if (!isFrame(seq.durationFrames) || seq.frameRate.num !== 24 || seq.frameRate.den !== 1 || seq.tracks.length !== 1) return false;
+  if (!isFrame(seq.durationFrames) || seq.frameRate.num !== 24 || seq.frameRate.den !== 1 || seq.tracks.length < 1) return false;
   const ids = new Set<string>();
+  const trackIds = new Set<string>();
   for (const track of seq.tracks) {
-    if (track.kind !== 'video') return false;
+    if (!track.id || trackIds.has(track.id) || !track.label || track.kind !== 'video') return false;
+    trackIds.add(track.id);
     let previousEnd = 0;
     for (const clip of track.clips) {
       const source = assets.find((item) => item.id === clip.assetId && item.status === 'ready');
@@ -134,34 +138,101 @@ function rippleInsert(
 ): SequenceView | null {
   const duration = sourceOut - sourceIn;
   const track = seq.tracks.find((item) => item.id === trackId);
-  if (!track || track.locked || track.kind !== 'video' || seq.tracks.length !== 1 ||
+  if (!track || track.locked || track.kind !== 'video' ||
       !isFrame(frame) || frame > seq.durationFrames ||
       !Number.isSafeInteger(seq.durationFrames + duration)) return null;
-  const clips: SequenceClip[] = [];
-  for (const clip of track.clips) {
-    if (clip.timelineOut <= frame) clips.push(clip);
-    else if (clip.timelineIn >= frame) clips.push(Object.freeze({
-      ...clip, timelineIn: clip.timelineIn + duration, timelineOut: clip.timelineOut + duration,
-    }));
-    else {
-      const leftDuration = frame - clip.timelineIn;
-      clips.push(Object.freeze({ ...clip, sourceOut: clip.sourceIn + leftDuration, timelineOut: frame }));
-      clips.push(Object.freeze({
-        ...clip, id: splitId, sourceIn: clip.sourceIn + leftDuration,
-        timelineIn: frame + duration, timelineOut: clip.timelineOut + duration,
+  const tracks = seq.tracks.map((row) => {
+    if (row.locked && row.clips.some((clip) => clip.timelineOut > frame)) return null;
+    const clips: SequenceClip[] = [];
+    for (const clip of row.clips) {
+      if (clip.timelineOut <= frame) clips.push(clip);
+      else if (clip.timelineIn >= frame) clips.push(Object.freeze({
+        ...clip, timelineIn: clip.timelineIn + duration, timelineOut: clip.timelineOut + duration,
       }));
+      else {
+        const leftDuration = frame - clip.timelineIn;
+        clips.push(Object.freeze({ ...clip, sourceOut: clip.sourceIn + leftDuration, timelineOut: frame }));
+        clips.push(Object.freeze({
+          ...clip, id: `${splitId}-${row.id}`, sourceIn: clip.sourceIn + leftDuration,
+          timelineIn: frame + duration, timelineOut: clip.timelineOut + duration,
+        }));
+      }
     }
-  }
-  clips.push(Object.freeze({
-    id: insertedId, assetId: source.id, sourceIn, sourceOut,
-    timelineIn: frame, timelineOut: frame + duration,
-  }));
-  clips.sort((a, b) => a.timelineIn - b.timelineIn);
+    if (row.id === trackId) clips.push(Object.freeze({
+      id: insertedId, assetId: source.id, sourceIn, sourceOut,
+      timelineIn: frame, timelineOut: frame + duration,
+    }));
+    clips.sort((a, b) => a.timelineIn - b.timelineIn);
+    return Object.freeze({ ...row, clips: Object.freeze(clips) });
+  });
+  if (tracks.some((row) => row === null)) return null;
   const next: SequenceView = Object.freeze({
     ...seq, durationFrames: seq.durationFrames + duration,
-    tracks: Object.freeze([Object.freeze({ ...track, clips: Object.freeze(clips) })]),
+    tracks: Object.freeze(tracks as SequenceTrack[]),
   });
   return next;
+}
+
+function nextTrackId(seq: SequenceView): string {
+  const max = seq.tracks.reduce((value, track) => {
+    const match = /^v(\d+)$/.exec(track.id);
+    return match ? Math.max(value, Number(match[1])) : value;
+  }, 0);
+  return `v${max + 1}`;
+}
+
+function placeSpan(seq: SequenceView, trackId: string, frame: number, source: AssetRecord,
+  sourceIn: number, sourceOut: number, clipId: string): SequenceView | null {
+  const track = seq.tracks.find((item) => item.id === trackId);
+  const end = frame + sourceOut - sourceIn;
+  if (!track || track.locked || !isFrame(frame) || !Number.isSafeInteger(end)) return null;
+  const clip: SequenceClip = Object.freeze({ id: clipId, assetId: source.id, sourceIn, sourceOut,
+    timelineIn: frame, timelineOut: end });
+  const overlap = track.clips.some((item) => item.timelineIn < end && frame < item.timelineOut);
+  const tracks = overlap ? Object.freeze([...seq.tracks, Object.freeze({
+    id: nextTrackId(seq), label: nextTrackId(seq).toUpperCase(), kind: 'video' as const,
+    locked: false, clips: Object.freeze([clip]),
+  })]) : Object.freeze(seq.tracks.map((item) => item.id === trackId ? Object.freeze({
+    ...item, clips: Object.freeze([...item.clips, clip].sort((a, b) => a.timelineIn - b.timelineIn)),
+  }) : item));
+  return Object.freeze({ ...seq, durationFrames: Math.max(seq.durationFrames, end), tracks });
+}
+
+function moveClip(seq: SequenceView, sourceTrackId: string, clipId: string,
+  targetTrackId: string, frame: number): SequenceView | null {
+  const sourceTrack = seq.tracks.find((item) => item.id === sourceTrackId);
+  const targetTrack = seq.tracks.find((item) => item.id === targetTrackId);
+  const clip = sourceTrack?.clips.find((item) => item.id === clipId);
+  if (!sourceTrack || !targetTrack || !clip || sourceTrack.locked || targetTrack.locked || !isFrame(frame)) return null;
+  const end = frame + clip.timelineOut - clip.timelineIn;
+  if (!Number.isSafeInteger(end)) return null;
+  const moved = Object.freeze({ ...clip, timelineIn: frame, timelineOut: end });
+  const withoutSource = seq.tracks.map((track) => track.id === sourceTrackId ? Object.freeze({
+    ...track, clips: Object.freeze(track.clips.filter((item) => item.id !== clipId)),
+  }) : track);
+  const destination = withoutSource.find((item) => item.id === targetTrackId)!;
+  const overlap = destination.clips.some((item) => item.timelineIn < end && frame < item.timelineOut);
+  const tracks = overlap ? Object.freeze([...withoutSource, Object.freeze({
+    id: nextTrackId(seq), label: nextTrackId(seq).toUpperCase(), kind: 'video' as const,
+    locked: false, clips: Object.freeze([moved]),
+  })]) : Object.freeze(withoutSource.map((track) => track.id === targetTrackId ? Object.freeze({
+    ...track, clips: Object.freeze([...track.clips, moved].sort((a, b) => a.timelineIn - b.timelineIn)),
+  }) : track));
+  return Object.freeze({ ...seq, durationFrames: Math.max(seq.durationFrames, end), tracks });
+}
+
+function trimClip(seq: SequenceView, intent: TrimTimelineClip): SequenceView | null {
+  const track = seq.tracks.find((item) => item.id === intent.trackId);
+  const clip = track?.clips.find((item) => item.id === intent.clipId);
+  if (!track || track.locked || !clip || !isFrame(intent.frame)) return null;
+  const delta = intent.frame - (intent.edge === 'in' ? clip.timelineIn : clip.timelineOut);
+  const trimmed = intent.edge === 'in'
+    ? Object.freeze({ ...clip, timelineIn: intent.frame, sourceIn: clip.sourceIn + delta })
+    : Object.freeze({ ...clip, timelineOut: intent.frame, sourceOut: clip.sourceOut + delta });
+  const tracks = Object.freeze(seq.tracks.map((row) => row.id === track.id ? Object.freeze({
+    ...row, clips: Object.freeze(row.clips.map((item) => item.id === clip.id ? trimmed : item)),
+  }) : row));
+  return Object.freeze({ ...seq, durationFrames: Math.max(seq.durationFrames, trimmed.timelineOut), tracks });
 }
 
 // One root producer publishes every accepted projection together before an edit promise settles.
@@ -177,7 +248,11 @@ class MockEditorRootTap extends BaseTap {
   private readonly targetControl: InsertTargetControl = {
     set: (target) => this.setTarget(target), clear: (owner) => this.clearTarget(owner),
   };
-  private readonly editorControl: EditorControl = { insert: (intent) => this.insert(intent) };
+  private readonly editorControl: EditorControl = {
+    insert: (intent) => this.insert(intent), place: (intent) => this.place(intent),
+    addTrack: (intent) => this.addTrack(intent), deleteTrack: (intent) => this.deleteTrack(intent),
+    moveClip: (intent) => this.moveClip(intent), trimClip: (intent) => this.trimClip(intent),
+  };
   private readonly historyControl: HistoryControl = {
     undo: () => this.moveHistory('undo'), redo: () => this.moveHistory('redo'),
   };
@@ -292,7 +367,8 @@ class MockEditorRootTap extends BaseTap {
     const result = this.makeResult('accepted-session-only', message, revision, footprint);
     const project = Object.freeze({ ...this.state.project, revision });
     const graph = Object.freeze({ graphId: this.state.graph.graphId, revision, sequence: accepted });
-    const target = this.state.target && this.state.target.frame <= accepted.durationFrames ? this.state.target : null;
+    const target = this.state.target && this.state.target.frame <= accepted.durationFrames &&
+      accepted.tracks.some((track) => track.id === this.state.target?.trackId) ? this.state.target : null;
     this.commit({ ...this.state, project, graph, target, result, journal, cursor });
     return Promise.resolve(result);
   }
@@ -326,6 +402,112 @@ class MockEditorRootTap extends BaseTap {
     const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
     return this.accept(next, journal, journal.length, target.frame,
       `Inserted ${intent.sourceOut - intent.sourceIn} frames at ${target.frame}; session only.`);
+  }
+
+  private validEditScope(intent: TimelineEditScope): boolean {
+    const { project, graph, change } = this.state;
+    return project.status === 'ready' && change.state === 'live' &&
+      intent.projectId === project.projectId && intent.sessionId === project.sessionId &&
+      intent.expectedRevision === graph.revision && intent.sequenceId === graph.sequence.id;
+  }
+
+  private addTrack(intent: TimelineEditScope): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const seq = this.state.graph.sequence;
+    const id = nextTrackId(seq);
+    const next = Object.freeze({ ...seq, tracks: Object.freeze([...seq.tracks, Object.freeze({
+      id, label: id.toUpperCase(), kind: 'video' as const, locked: false, clips: Object.freeze([]),
+    })]) });
+    if (!validateSequence(next, this.state.assets)) return this.reject('Track could not be added.');
+    const entry: JournalEntry = Object.freeze({ before: seq, after: next, fromFrame: 0, label: 'Add track' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, 0, `Added ${id.toUpperCase()}; session only.`);
+  }
+
+  private deleteTrack(intent: DeleteTrack): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const seq = this.state.graph.sequence;
+    const track = seq.tracks.find((item) => item.id === intent.trackId);
+    if (!track || seq.tracks.length <= 1) return this.reject('At least one track must remain.');
+    const next = Object.freeze({ ...seq, tracks: Object.freeze(seq.tracks.filter((item) => item.id !== track.id)) });
+    if (!validateSequence(next, this.state.assets)) return this.reject('Track could not be deleted.');
+    const entry: JournalEntry = Object.freeze({ before: seq, after: next, fromFrame: 0, label: 'Delete track' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, 0, `Deleted ${track.label} and its clips; session only.`);
+  }
+
+  private place(intent: PlaceSourceSpan): Promise<EditorResult> {
+    const { graph, assets, binding } = this.state;
+    if (!this.validEditScope(intent) || intent.bindingSetId !== binding.bindingSetId) {
+      return this.reject('Project, session, graph revision, or binding set is stale.');
+    }
+    if (intent.target.projectId !== intent.projectId || intent.target.graphId !== graph.graphId ||
+      intent.target.sequenceId !== intent.sequenceId || !this.isTimelineOwner(intent.target.ownerTabId)) {
+      return this.reject('Drop target is not a live timeline.');
+    }
+    const source = assets.find((item) => item.id === intent.assetId);
+    if (!source || source.status !== 'ready' || source.version !== intent.assetVersion ||
+      !binding.byAssetId[source.id] || !isFrame(intent.sourceIn) || !isFrame(intent.sourceOut) ||
+      intent.sourceOut <= intent.sourceIn || intent.sourceOut > source.frameCount ||
+      source.frameRate.num !== 24 || source.frameRate.den !== 1) {
+      return this.reject('Source span or asset version is invalid.');
+    }
+    const frame = intent.target.frame;
+    const serial = this.clipSerial + 1;
+    const next = placeSpan(graph.sequence, intent.target.trackId, frame, source,
+      intent.sourceIn, intent.sourceOut, `place-${serial}`);
+    if (!next || !validateSequence(next, assets)) return this.reject('Drop would create an invalid or locked track.');
+    this.clipSerial = serial;
+    const addedTrack = next.tracks.length > graph.sequence.tracks.length;
+    const entry: JournalEntry = Object.freeze({ before: graph.sequence, after: next,
+      fromFrame: frame, label: addedTrack ? 'Place source on new track' : 'Place source span' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, frame,
+      `Placed ${intent.sourceOut - intent.sourceIn} frames at ${frame}${addedTrack ? ' on a new track' : ''}; session only.`);
+  }
+
+  private moveClip(intent: MoveTimelineClip): Promise<EditorResult> {
+    const { graph, assets } = this.state;
+    if (!this.validEditScope(intent) || intent.target.projectId !== intent.projectId ||
+      intent.target.graphId !== graph.graphId || intent.target.sequenceId !== intent.sequenceId ||
+      !this.isTimelineOwner(intent.target.ownerTabId)) {
+      return this.reject('Clip move target is stale or not a live timeline.');
+    }
+    const original = graph.sequence.tracks.find((track) => track.id === intent.sourceTrackId)
+      ?.clips.find((clip) => clip.id === intent.clipId);
+    if (!original) return this.reject('Clip is no longer on its source track.');
+    const next = moveClip(graph.sequence, intent.sourceTrackId, intent.clipId,
+      intent.target.trackId, intent.target.frame);
+    if (!next || !validateSequence(next, assets)) return this.reject('Clip cannot be moved onto that track.');
+    if (intent.sourceTrackId === intent.target.trackId && original.timelineIn === intent.target.frame) {
+      return this.reject('Clip is already at that position.');
+    }
+    const addedTrack = next.tracks.length > graph.sequence.tracks.length;
+    const fromFrame = Math.min(original.timelineIn, intent.target.frame);
+    const entry: JournalEntry = Object.freeze({ before: graph.sequence, after: next,
+      fromFrame, label: addedTrack ? 'Move clip to new track' : 'Move clip' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, fromFrame,
+      `Moved clip to ${intent.target.frame}${addedTrack ? ' on a new track' : ''}; session only.`);
+  }
+
+  private trimClip(intent: TrimTimelineClip): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const seq = this.state.graph.sequence;
+    const original = seq.tracks.find((track) => track.id === intent.trackId)
+      ?.clips.find((clip) => clip.id === intent.clipId);
+    if (!original || (intent.edge !== 'in' && intent.edge !== 'out')) return this.reject('Clip trim target is invalid.');
+    const oldFrame = intent.edge === 'in' ? original.timelineIn : original.timelineOut;
+    if (oldFrame === intent.frame) return this.reject('Clip edge is already at that frame.');
+    const next = trimClip(seq, intent);
+    if (!next || !validateSequence(next, this.state.assets)) {
+      return this.reject('Clip trim exceeds the source or adjacent clip.');
+    }
+    const fromFrame = Math.min(oldFrame, intent.frame);
+    const entry: JournalEntry = Object.freeze({ before: seq, after: next, fromFrame, label: 'Trim clip' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, fromFrame,
+      `Trimmed clip ${intent.edge} to ${intent.frame}; session only.`);
   }
 
   private moveHistory(direction: 'undo' | 'redo'): Promise<EditorResult> {

@@ -14,6 +14,14 @@ const MIN_ZOOM = 2;
 const MAX_ZOOM = 32;
 const DEFAULT_ZOOM = 8;
 
+export function frameFromTimelineX(clientX: number, left: number, startFrame: number, pixelsPerFrame: number): number {
+  if (!Number.isFinite(clientX) || !Number.isFinite(left) || !Number.isFinite(startFrame) ||
+      !Number.isFinite(pixelsPerFrame) || pixelsPerFrame <= 0) return 0;
+  const frame = startFrame + (clientX - left) / pixelsPerFrame;
+  const lower = Math.floor(frame);
+  return Math.max(0, lower + (frame - lower > 0.5 ? 1 : 0));
+}
+
 export function boundedFrame(frame: number, duration: number): number | null {
   return Number.isInteger(frame) && frame >= 0 && frame < duration ? frame : null;
 }
