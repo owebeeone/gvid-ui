@@ -55,38 +55,139 @@ function ranges(clips: readonly { assetId: string; sourceIn: number; sourceOut: 
     [assetId, sourceIn, sourceOut, timelineIn, timelineOut]);
 }
 
+function expectLinkedPair(get: <T>(grip: Grip<T>) => T, number: number): void {
+  const sequence = get(GVID_SEQUENCE_VIEW);
+  const video = sequence.tracks.find((track) => track.id === `v${number}`)!;
+  const audio = sequence.tracks.find((track) => track.id === `a${number}`)!;
+  expect(video.kind).toBe('video');
+  expect(audio.kind).toBe('audio');
+  for (const clip of video.clips) {
+    const asset = get(GVID_ASSET_CATALOG).find((item) => item.id === clip.assetId)!;
+    const partner = audio.clips.find((item) => item.id === clip.linkedClipId);
+    if (!asset.hasAudio) {
+      expect(partner).toBeUndefined();
+      continue;
+    }
+    expect(partner).toMatchObject({ linkedClipId: clip.id, assetId: clip.assetId,
+      sourceIn: clip.sourceIn, sourceOut: clip.sourceOut,
+      timelineIn: clip.timelineIn, timelineOut: clip.timelineOut });
+  }
+  expect(audio.clips).toHaveLength(video.clips.filter((clip) =>
+    get(GVID_ASSET_CATALOG).find((asset) => asset.id === clip.assetId)?.hasAudio).length);
+}
+
 describe('mock editor root Grips', () => {
+  it('toggles video visibility and audio mute independently with undo and stale-scope checks', async () => {
+    const { get, scope } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const history = get(GVID_HISTORY_CONTROL);
+    expect((await edit.setVideoHidden({ ...scope(), trackId: 'a1', hidden: true })).status).toBe('rejected');
+    expect((await edit.setAudioMuted({ ...scope(), trackId: 'v1', muted: true })).status).toBe('rejected');
+    expect((await edit.setVideoHidden({ ...scope(), trackId: 'v1', hidden: true })).status)
+      .toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v1')?.hidden).toBe(true);
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'a1')?.muted).toBe(false);
+    expect((await edit.setAudioMuted({ ...scope(), trackId: 'a1', muted: true })).status)
+      .toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v1')?.hidden).toBe(true);
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'a1')?.muted).toBe(true);
+    expect((await edit.setAudioMuted({ ...scope(), expectedRevision: 1,
+      trackId: 'a1', muted: false })).status).toBe('rejected');
+    await history.undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'a1')?.muted).toBe(false);
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v1')?.hidden).toBe(true);
+    await history.undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v1')?.hidden).toBeFalsy();
+    await history.redo();
+    await history.redo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v1')?.hidden).toBe(true);
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'a1')?.muted).toBe(true);
+  });
+  it('publishes numbered linked audio tracks and keeps video-only sources silent', async () => {
+    const { get, scope, target, placeIntent } = setup();
+    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1', 'a1']);
+    expectLinkedPair(get, 1);
+    get(GVID_PROJECT_CONTROL).open('mock-b');
+    expect(get(GVID_ASSET_CATALOG).find((asset) => asset.id === 'studio-b')?.hasAudio).toBe(false);
+    expectLinkedPair(get, 1);
+    await get(GVID_EDIT_COMMAND).place(placeIntent(target(96), { assetId: 'studio-b' }));
+    expectLinkedPair(get, 1);
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'a1')?.clips).toHaveLength(1);
+    expect(scope().expectedRevision).toBe(2);
+  });
+
+  it('moves either half of an A/V clip across time and numbered track pairs, including overlap', async () => {
+    const { get, scope, target } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    await edit.addTrack(scope());
+    expect((await edit.moveClip({ ...scope(), sourceTrackId: 'v1', clipId: 'clip-a',
+      target: { ...target(72), trackId: 'v2' } })).status).toBe('accepted-session-only');
+    expectLinkedPair(get, 1);
+    expectLinkedPair(get, 2);
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'a2')?.clips[0])
+      .toMatchObject({ id: 'audio-clip-a', timelineIn: 72 });
+    expect((await edit.moveClip({ ...scope(), sourceTrackId: 'a2', clipId: 'audio-clip-a',
+      target: { ...target(96), trackId: 'a1' } })).status).toBe('accepted-session-only');
+    expectLinkedPair(get, 1);
+    expectLinkedPair(get, 2);
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v1')?.clips.at(-1))
+      .toMatchObject({ id: 'clip-a', timelineIn: 96, timelineOut: 144 });
+    expect((await edit.moveClip({ ...scope(), sourceTrackId: 'a1', clipId: 'audio-clip-a',
+      target: { ...target(48), trackId: 'a1' } })).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1', 'v2', 'v3', 'a1', 'a2', 'a3']);
+    expectLinkedPair(get, 3);
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1', 'v2', 'a1', 'a2']);
+    expectLinkedPair(get, 1);
+  });
+
+  it('keeps A/V halves aligned through audio-side trim, split, cut, and undo', async () => {
+    const { get, scope } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    expect((await edit.trimClip({ ...scope(), trackId: 'a1', clipId: 'audio-clip-a',
+      edge: 'in', frame: 8 })).status).toBe('accepted-session-only');
+    expectLinkedPair(get, 1);
+    expect((await edit.splitClip({ ...scope(), trackId: 'a1', frame: 24 })).status).toBe('accepted-session-only');
+    expectLinkedPair(get, 1);
+    expect((await edit.cutClip({ ...scope(), trackId: 'a1', clipId: 'audio-clip-a' })).status)
+      .toBe('accepted-session-only');
+    expectLinkedPair(get, 1);
+    await get(GVID_HISTORY_CONTROL).undo();
+    expectLinkedPair(get, 1);
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'a1')?.clips[0])
+      .toMatchObject({ id: 'audio-clip-a', timelineIn: 8, timelineOut: 24 });
+  });
   it('adds and deletes tracks with their clips as undoable sequence snapshots', async () => {
     const { get, scope, target, placeIntent } = setup();
     const edit = get(GVID_EDIT_COMMAND);
     const history = get(GVID_HISTORY_CONTROL);
     expect((await edit.deleteTrack({ ...scope(), trackId: 'v1' })).status).toBe('rejected');
     expect((await edit.addTrack(scope())).status).toBe('accepted-session-only');
-    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1', 'v2']);
+    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1', 'v2', 'a1', 'a2']);
     expect((await edit.place(placeIntent({ ...target(12), trackId: 'v2' }))).status).toBe('accepted-session-only');
     expect(get(GVID_SEQUENCE_VIEW).tracks[1].clips).toHaveLength(1);
     expect((await edit.deleteTrack({ ...scope(), trackId: 'v2' })).status).toBe('accepted-session-only');
-    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1']);
+    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1', 'a1']);
     expect(get(GVID_HISTORY_VIEW).undoLabel).toBe('Delete track');
     expect((await history.undo()).status).toBe('accepted-session-only');
     expect(get(GVID_SEQUENCE_VIEW).tracks[1].clips).toHaveLength(1);
     expect((await history.redo()).status).toBe('accepted-session-only');
-    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1']);
+    expect(get(GVID_SEQUENCE_VIEW).tracks.map((track) => track.id)).toEqual(['v1', 'a1']);
   });
 
   it('places at the drop frame and auto-adds a track only on overlap', async () => {
     const { get, target, placeIntent } = setup();
     const edit = get(GVID_EDIT_COMMAND);
     expect((await edit.place(placeIntent(target(96)))).status).toBe('accepted-session-only');
-    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(1);
+    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(2);
     expect(ranges(get(GVID_SEQUENCE_VIEW).tracks[0].clips).at(-1)).toEqual(['workshop', 0, 24, 96, 120]);
     expect((await edit.place(placeIntent(target(24), { sourceIn: 8, sourceOut: 20 }))).status).toBe('accepted-session-only');
     const seq = get(GVID_SEQUENCE_VIEW);
-    expect(seq.tracks).toHaveLength(2);
+    expect(seq.tracks).toHaveLength(4);
     expect(ranges(seq.tracks[1].clips)).toEqual([['workshop', 8, 20, 24, 36]]);
     expect(seq.durationFrames).toBe(120);
     expect((await get(GVID_HISTORY_CONTROL).undo()).status).toBe('accepted-session-only');
-    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(1);
+    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(2);
   });
 
   it('copies whole trimmed clips, cuts them with undo, and pastes at the playhead target', async () => {
@@ -124,7 +225,7 @@ describe('mock editor root Grips', () => {
     expect((await edit.pasteClip({ ...scope(), target: target(24) })).status).toBe('rejected');
     expect((await edit.copyClip({ ...scope(), trackId: 'v1', clipId: 'clip-a' })).status).toBe('accepted-session-only');
     expect((await edit.pasteClip({ ...scope(), target: target(24) })).status).toBe('accepted-session-only');
-    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(2);
+    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(4);
     expect(ranges(get(GVID_SEQUENCE_VIEW).tracks[1].clips)).toEqual([
       ['lighthouse', 12, 60, 24, 72],
     ]);
@@ -193,10 +294,10 @@ describe('mock editor root Grips', () => {
     });
     expect((await edit.moveClip({ ...scope(), sourceTrackId: 'v1', clipId,
       target: target('v1', 48) })).status).toBe('accepted-session-only');
-    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(2);
+    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(4);
     expect(get(GVID_SEQUENCE_VIEW).tracks[1].clips[0]).toMatchObject({ id: clipId, timelineIn: 48, timelineOut: 96 });
     expect((await history.undo()).status).toBe('accepted-session-only');
-    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(1);
+    expect(get(GVID_SEQUENCE_VIEW).tracks).toHaveLength(2);
     expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0]).toMatchObject({ id: clipId, timelineIn: 0 });
     expect((await edit.addTrack(scope())).status).toBe('accepted-session-only');
     expect((await edit.moveClip({ ...scope(), sourceTrackId: 'v1', clipId,

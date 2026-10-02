@@ -7,13 +7,20 @@ import {
   GVID_TIMELINE_VIEWPORT, GVID_TIMELINE_VIEWPORT_TAP,
   type AssetRecord, type ChangeStatus, type FrameMarks, type GraphView, type MarksControl,
   type ProjectView, type SequenceClip, type SequenceView, type SourceDragSpan, type TimelineClipDrag,
-  type TimelineDropProjection, type TimelineSelection, type TimelineViewport,
+  type TimelineDropProjection, type TimelineSelection, type TimelineViewport, type SequenceTrack,
   type TransportControl, type TransportView,
 } from '@gvidjs/contracts';
 
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 32;
 const DEFAULT_ZOOM = 8;
+
+export function orderedTimelineTracks(sequence: SequenceView): readonly SequenceTrack[] {
+  return [
+    ...sequence.tracks.filter((track) => track.kind === 'video').reverse(),
+    ...sequence.tracks.filter((track) => track.kind === 'audio'),
+  ];
+}
 
 export function frameFromTimelineX(clientX: number, left: number, startFrame: number, pixelsPerFrame: number): number {
   if (!Number.isFinite(clientX) || !Number.isFinite(left) || !Number.isFinite(startFrame) ||
@@ -39,7 +46,7 @@ export function snapTimelineFrame(sequence: SequenceView, frame: number, options
     options.pixelsPerFrame <= 0) return frame;
   const span = options.spanFrames ?? 0;
   const anchors = [0, sequence.durationFrames, ...(options.anchors ?? [])];
-  for (const track of sequence.tracks) for (const clip of track.clips) {
+  for (const track of sequence.tracks.filter((row) => row.kind === 'video')) for (const clip of track.clips) {
     if (clip.id !== options.excludeClipId) anchors.push(clip.timelineIn, clip.timelineOut);
   }
   let snapped = frame;
@@ -55,14 +62,15 @@ export function snapTimelineFrame(sequence: SequenceView, frame: number, options
 export function clipBoundaryFrame(sequence: SequenceView, frame: number, direction: 'up' | 'down'): number {
   if (boundedFrame(frame, sequence.durationFrames) === null) return frame;
   let current: SequenceClip | null = null;
-  for (let index = sequence.tracks.length - 1; index >= 0; index--) {
-    current = sequence.tracks[index].clips.find((clip) => clip.timelineIn <= frame && frame < clip.timelineOut) ?? null;
+  const videoTracks = sequence.tracks.filter((track) => track.kind === 'video');
+  for (let index = videoTracks.length - 1; index >= 0; index--) {
+    current = videoTracks[index].clips.find((clip) => clip.timelineIn <= frame && frame < clip.timelineOut) ?? null;
     if (current) break;
   }
   const edge = current && (direction === 'up' ? current.timelineIn : current.timelineOut - 1);
   if (edge !== null && edge !== frame) return edge;
   let next = frame;
-  for (const track of sequence.tracks) {
+  for (const track of videoTracks) {
     for (const clip of track.clips) {
       const candidate = direction === 'up' ? clip.timelineOut - 1 : clip.timelineIn;
       if (direction === 'up' && candidate < frame && (next === frame || candidate > next)) next = candidate;
@@ -79,10 +87,16 @@ export function projectDropPreview(
 ): TimelineDropProjection | null {
   const target = sequence.tracks.find((track) => track.id === targetTrackId);
   if (!target || target.locked || !Number.isSafeInteger(pointerFrame) || pointerFrame < 0) return null;
+  const videoTarget = sequence.tracks.find((track) => track.id ===
+    (target.kind === 'audio' ? target.id.replace(/^a(\d+)$/, 'v$1') : target.id));
+  const audioTarget = sequence.tracks.find((track) => track.id ===
+    videoTarget?.id.replace(/^v(\d+)$/, 'a$1'));
+  if (!videoTarget || videoTarget.locked) return null;
 
-  let clip: Pick<SequenceClip, 'assetId' | 'sourceIn' | 'sourceOut'>;
+  let clip: Pick<SequenceClip, 'assetId' | 'sourceIn' | 'sourceOut' | 'linkedClipId'>;
   let sourceTrackId: string | null = null;
   let clipId: string | null = null;
+  let hasAudio = false;
   let frame = pointerFrame;
   if (input.kind === 'source') {
     const { span, asset } = input;
@@ -91,30 +105,41 @@ export function projectDropPreview(
       !Number.isSafeInteger(span.sourceIn) || !Number.isSafeInteger(span.sourceOut) ||
       span.sourceIn < 0 || span.sourceOut <= span.sourceIn || span.sourceOut > asset.frameCount) return null;
     clip = { assetId: span.assetId, sourceIn: span.sourceIn, sourceOut: span.sourceOut };
+    hasAudio = asset.hasAudio;
   } else {
     const { moving } = input;
     const source = sequence.tracks.find((track) => track.id === moving.sourceTrackId);
     const found = source?.clips.find((item) => item.id === moving.clipId);
+    const sourceVideo = sequence.tracks.find((track) => track.id ===
+      source?.id.replace(/^a(\d+)$/, 'v$1'));
+    const sourceAudio = sequence.tracks.find((track) => track.id ===
+      sourceVideo?.id.replace(/^v(\d+)$/, 'a$1'));
     if (!source || source.locked || !found || !Number.isSafeInteger(moving.grabOffsetFrames) ||
-      moving.grabOffsetFrames < 0 || moving.grabOffsetFrames >= found.timelineOut - found.timelineIn) return null;
+      !sourceVideo || sourceVideo.locked || found.linkedClipId && sourceAudio?.locked ||
+      moving.grabOffsetFrames < 0 ||
+      moving.grabOffsetFrames >= found.timelineOut - found.timelineIn) return null;
     clip = found;
+    hasAudio = Boolean(found.linkedClipId);
     sourceTrackId = source.id;
     clipId = found.id;
     frame = Math.max(0, pointerFrame - moving.grabOffsetFrames);
   }
+  if (target.kind === 'audio' && !hasAudio || hasAudio && audioTarget?.locked) return null;
   const end = frame + clip.sourceOut - clip.sourceIn;
   if (!Number.isSafeInteger(end)) return null;
-  const createsTrack = target.clips.some((item) =>
-    !(sourceTrackId === target.id && item.id === clipId) && item.timelineIn < end && frame < item.timelineOut);
+  const movingVideoId = sourceTrackId?.startsWith('a') ? clip.linkedClipId : clipId;
+  const createsTrack = videoTarget.clips.some((item) =>
+    !(videoTarget.id === (sourceTrackId?.replace(/^a(\d+)$/, 'v$1')) && item.id === movingVideoId) &&
+    item.timelineIn < end && frame < item.timelineOut);
   const maxTrack = sequence.tracks.reduce((max, track) => {
     const match = /^v(\d+)$/.exec(track.id);
     return match ? Math.max(max, Number(match[1])) : max;
   }, 0);
   return {
     kind: input.kind, assetId: clip.assetId, sourceIn: clip.sourceIn, sourceOut: clip.sourceOut,
-    sourceTrackId, clipId, targetTrackId,
-    resolvedTrackId: createsTrack ? `v${maxTrack + 1}` : targetTrackId,
-    createsTrack, frame,
+    sourceTrackId, clipId, targetTrackId: videoTarget.id,
+    resolvedTrackId: createsTrack ? `v${maxTrack + 1}` : videoTarget.id,
+    createsTrack, hasAudio, frame,
   };
 }
 

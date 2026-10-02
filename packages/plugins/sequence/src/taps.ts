@@ -11,6 +11,7 @@ import {
   type SequenceClip, type SequenceDestination, type SequenceFrameKey, type SequenceView,
   type TabLinkView,
 } from '@gvidjs/contracts';
+import { SequenceAudioPreviewTap } from './audio';
 
 function unresolved(viewerId: string, project?: ProjectView, reason = 'Sequence link is unavailable.'): SequenceDestination {
   return {
@@ -141,7 +142,9 @@ function requestSnapshot(
 
 export function topmostClipAt(sequence: SequenceView, frame: number): SequenceClip | null {
   for (let index = sequence.tracks.length - 1; index >= 0; index--) {
-    const clip = sequence.tracks[index].clips.find((item) => item.timelineIn <= frame && frame < item.timelineOut);
+    const track = sequence.tracks[index];
+    if (track.kind !== 'video' || track.hidden) continue;
+    const clip = track.clips.find((item) => item.timelineIn <= frame && frame < item.timelineOut);
     if (clip) return clip;
   }
   return null;
@@ -355,5 +358,6 @@ export function sequenceTabTaps(tabId: string): Tap[] {
     new SequenceDestinationTabTap(tabId),
     new SequencePreviewProviderTap(tabId),
     new SequencePresentationTap(),
+    new SequenceAudioPreviewTap(),
   ];
 }

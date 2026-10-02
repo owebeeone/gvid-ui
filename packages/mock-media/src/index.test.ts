@@ -18,6 +18,7 @@ const asset: AssetRecord = {
   width: 640,
   height: 360,
   frameRate: { num: 24, den: 1 },
+  hasAudio: true,
   status: 'ready',
 };
 

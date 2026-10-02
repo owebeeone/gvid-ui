@@ -54,7 +54,7 @@ export function Assets({ tabId }: { tabId: string }) {
                 <span className={`gvid-asset-status gvid-asset-status-${asset.status}`}>{asset.status}</span>
               </span>
               <span className="gvid-asset-meta">{asset.width} x {asset.height} | {frameRate(asset)}</span>
-              <span className="gvid-asset-meta">{asset.frameCount} frames | {asset.version}</span>
+              <span className="gvid-asset-meta">{asset.frameCount} frames | {asset.hasAudio ? 'A/V' : 'Video'} | {asset.version}</span>
               {asset.reason && <span className="gvid-asset-reason">{asset.reason}</span>}
             </span>
           </button>

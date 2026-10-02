@@ -28,7 +28,7 @@ const graph: GraphView = { graphId: 'graph-a', revision: 1, sequence };
 const assets: AssetRecord[] = clips.map((clip) => ({
   id: clip.assetId, displayName: clip.id === 'a' ? 'Lighthouse' : 'Workshop',
   version: '1', fingerprint: clip.id, streamId: clip.id, frameCount: 120,
-  width: 640, height: 360, frameRate: { num: 24, den: 1 }, status: 'ready',
+  width: 640, height: 360, frameRate: { num: 24, den: 1 }, hasAudio: true, status: 'ready',
 }));
 const links = [
   { tabId: 'timeline', toolId: GVID_TOOLS.timeline, params: {} },
@@ -36,6 +36,16 @@ const links = [
 ];
 
 describe('sequence destination', () => {
+  it('ignores audio tracks when choosing the topmost visible frame', () => {
+    const withAudio: SequenceView = { ...sequence, tracks: [...sequence.tracks, {
+      id: 'a1', label: 'A1', kind: 'audio', locked: false,
+      clips: [{ ...clips[0], id: 'audio-a', linkedClipId: 'a' }],
+    }] };
+    expect(topmostClipAt(withAudio, 2)?.id).toBe('a');
+    expect(topmostClipAt({ ...withAudio, tracks: [
+      { ...withAudio.tracks[0], hidden: true }, withAudio.tracks[1],
+    ] }, 2)).toBeNull();
+  });
   it('previews the highest occupied track at an overlap and falls through gaps', () => {
     const layered: SequenceView = { ...sequence, tracks: [...sequence.tracks,
       { id: 'v2', label: 'V2', kind: 'video', locked: false, clips: [
@@ -43,6 +53,8 @@ describe('sequence destination', () => {
       ] },
     ] };
     expect(topmostClipAt(layered, 15)?.id).toBe('top');
+    expect(topmostClipAt({ ...layered, tracks: [layered.tracks[0],
+      { ...layered.tracks[1], hidden: true }] }, 15)?.id).toBe('a');
     expect(topmostClipAt(layered, 5)?.id).toBe('a');
     expect(topmostClipAt(layered, 99)).toBeNull();
   });
@@ -96,6 +108,58 @@ describe('sequence destination', () => {
 });
 
 describe('sequence request lifecycle', () => {
+  it('switches the preview to V1 when an overlapping V2 is hidden', async () => {
+    const grok = new Grok(new GripRegistry());
+    const layered: SequenceView = { ...sequence, revision: 7, tracks: [
+      { ...sequence.tracks[0], clips: [{ ...clips[1], timelineIn: 20, timelineOut: 68 }] },
+      { id: 'v2', label: 'V2', kind: 'video', locked: false, clips: [
+        { ...clips[0], timelineIn: 0, timelineOut: 48 },
+      ] },
+    ] };
+    const seen: string[] = [];
+    const provider: FrameProvider = {
+      source: async () => { throw new Error('unused'); },
+      sequence: async (key, _clip, asset) => {
+        seen.push(asset?.displayName ?? 'gap');
+        return { key, state: 'ready', fidelity: 'mock', composition: 'mock-topmost-track',
+          resource: { kind: 'mock-png', leaseId: `lease-${seen.length}`, objectUrl: 'blob:frame' } };
+      },
+      release: vi.fn(),
+    };
+    const projectTap = createAtomValueTap(GVID_PROJECT_VIEW, { initial: { ...project, revision: 7 } });
+    const graphTap = createAtomValueTap(GVID_GRAPH_VIEW, { initial: { ...graph, revision: 7, sequence: layered } });
+    const sequenceTap = createAtomValueTap(GVID_SEQUENCE_VIEW, { initial: layered });
+    for (const tap of [
+      createAtomValueTap(DESKTOP_TAB_LINKS, { initial: links }), projectTap, graphTap, sequenceTap,
+      createAtomValueTap(GVID_BINDING_VIEW, { initial: binding }),
+      createAtomValueTap(GVID_CHANGE_STATUS, { initial: { state: 'live' as const } }),
+      createAtomValueTap(GVID_ASSET_CATALOG, { initial: assets }),
+      createAtomValueTap(GVID_FRAME_PROVIDER, { initial: provider }),
+    ]) grok.registerTap(tap);
+    const timeline = grok.mainPresentationContext.getOrCreateMatchingContext('tab:timeline');
+    timeline.getGripHomeContext().registerTap(createAtomValueTap(GVID_DEST_SEQUENCE_ID, { initial: 'main' }));
+    timeline.getGripHomeContext().registerTap(createAtomValueTap(GVID_DEST_TIMELINE_FRAME, { initial: 31 }));
+    const viewer = grok.mainPresentationContext.getOrCreateMatchingContext('tab:viewer');
+    const home = viewer.getGripHomeContext();
+    for (const tap of sequenceTabTaps('viewer')) home.registerTap(tap);
+    home.addParent(timeline.getGripHomeContext(), -1);
+    grok.resolver.addParent(home, timeline.getGripHomeContext());
+    const presentation = viewer.getGripConsumerContext().getOrCreateConsumer(GVID_SEQUENCE_PRESENTATION);
+    presentation.subscribe(() => {});
+    grok.flush();
+    await expect.poll(() => presentation.get()?.state).toBe('current');
+    expect(seen.at(-1)).toBe('Lighthouse');
+
+    const hidden = { ...layered, revision: 8, tracks: [layered.tracks[0], { ...layered.tracks[1], hidden: true }] };
+    projectTap.set({ ...project, revision: 8 });
+    graphTap.set({ ...graph, revision: 8, sequence: hidden });
+    sequenceTap.set(hidden);
+    grok.flush();
+    await expect.poll(() => presentation.get()?.state).toBe('current');
+    expect(presentation.get()?.key?.revision).toBe(8);
+    expect(seen.at(-1)).toBe('Workshop');
+  });
+
   it('requests the active clip, ignores late frames, releases leases and follows retargets', async () => {
     const grok = new Grok(new GripRegistry());
     const linkTap = createAtomValueTap(DESKTOP_TAB_LINKS, { initial: links });

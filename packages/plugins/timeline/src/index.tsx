@@ -1,4 +1,4 @@
-import { addEntry } from '@grythjs/plugin-api';
+import { addEntry, DESKTOP_OPEN_WIRED } from '@grythjs/plugin-api';
 import { useGrip } from '@owebeeone/grip-react';
 import {
   GVID_ACTIVE_INSERT_TARGET, GVID_ACTIVE_INSERT_TARGET_CONTROL, GVID_ASSET_CATALOG,
@@ -13,7 +13,8 @@ import {
   GVID_TIMELINE_TRANSPORT_CONTROL, GVID_TIMELINE_VIEWPORT, GVID_TIMELINE_VIEWPORT_TAP,
   GVID_TOOLS, type SequenceTrack, type TimelineDropPreview,
 } from '@gvidjs/contracts';
-import { clipBoundaryFrame, frameFromTimelineX, projectDropPreview, snapTimelineFrame, TimelineTabTap } from './timeline';
+import { clipBoundaryFrame, frameFromTimelineX, orderedTimelineTracks, projectDropPreview,
+  snapTimelineFrame, TimelineTabTap } from './timeline';
 import './timeline.css';
 
 interface RulerGesture {
@@ -61,13 +62,14 @@ export function Timeline({ tabId }: { tabId: string }) {
   const trimDraft = useGrip(GVID_TIMELINE_TRIM_DRAFT);
   const trimDraftTap = useGrip(GVID_TIMELINE_TRIM_DRAFT_TAP);
   const editResult = useGrip(GVID_EDIT_RESULT);
+  const openWired = useGrip(DESKTOP_OPEN_WIRED);
 
   const availableSequence = !!project?.projectId && project.status === 'ready' &&
     change?.state === 'live' && graph?.graphId === sequence?.graphId &&
     graph?.revision === sequence?.revision && project.revision === graph?.revision;
   const accepted = availableSequence && sequenceId === sequence?.id;
   const duration = accepted ? sequence?.durationFrames ?? 0 : 0;
-  const tracks = accepted ? [...(sequence?.tracks ?? [])].reverse() : [];
+  const tracks = accepted && sequence ? orderedTimelineTracks(sequence) : [];
   const preview = accepted && dropPreview?.ownerTabId === tabId &&
     dropPreview.projectId === project?.projectId && dropPreview.sessionId === project?.sessionId &&
     dropPreview.sequenceId === sequenceId &&
@@ -135,7 +137,7 @@ export function Timeline({ tabId }: { tabId: string }) {
     const rawStart = Math.max(0, pointerFrame - moving.grabOffsetFrames);
     const start = snapEnabled && movingClip ? snapTimelineFrame(sequence, rawStart, {
       pixelsPerFrame, spanFrames: movingClip.timelineOut - movingClip.timelineIn,
-      anchors: snapAnchors, excludeClipId: movingClip.id,
+      anchors: snapAnchors, excludeClipId: movingClip.linkedClipId ?? movingClip.id,
     }) : rawStart;
     const projection = projectDropPreview(sequence, track.id, start + moving.grabOffsetFrames,
       { kind: 'clip', moving });
@@ -172,10 +174,11 @@ export function Timeline({ tabId }: { tabId: string }) {
     dropPreviewTap?.set(next);
   };
   const chooseTarget = (track: SequenceTrack | undefined, frame: number) => {
-    if (!track || track.locked || !targetControl || !accepted || !project?.projectId || !graph || !sequenceId ||
+    const videoTrack = sequence?.tracks.find((item) => item.id === track?.id.replace(/^a(\d+)$/, 'v$1'));
+    if (!videoTrack || videoTrack.locked || track?.locked || !targetControl || !accepted || !project?.projectId || !graph || !sequenceId ||
         !Number.isInteger(frame) || frame < 0 || frame > duration) return;
     targetControl.set({ projectId: project.projectId, graphId: graph.graphId, sequenceId,
-      trackId: track.id, frame, ownerTabId: tabId });
+      trackId: videoTrack.id, frame, ownerTabId: tabId });
   };
   const changeZoom = (next: number) => viewportTap?.set({
     startFrame, pixelsPerFrame: next, verticalScroll: viewport?.verticalScroll ?? 0, snapEnabled,
@@ -219,7 +222,8 @@ export function Timeline({ tabId }: { tabId: string }) {
               event.currentTarget.focus({ preventScroll: true });
               void edit.pasteClip({ ...scope, target: { projectId: scope.projectId,
                 graphId: graph.graphId, sequenceId: scope.sequenceId,
-                trackId: selectedTrack.id, frame: currentFrame, ownerTabId: tabId } });
+                trackId: selectedTrack.id.replace(/^a(\d+)$/, 'v$1'),
+                frame: currentFrame, ownerTabId: tabId } });
             } else if (selection?.trackId && selection.clipId) {
               if (key === 'x') event.currentTarget.focus({ preventScroll: true });
               const intent = { ...scope, trackId: selection.trackId, clipId: selection.clipId };
@@ -291,6 +295,10 @@ export function Timeline({ tabId }: { tabId: string }) {
             {sequence && <option value={sequence.id}>{sequence.id}</option>}
           </select>
         </label>
+        <div className="gvid-timeline-group">
+          <button type="button" title="Open linked sequence viewer" disabled={!accepted || !openWired}
+            onClick={() => openWired?.(tabId, { toolId: GVID_TOOLS.sequence })}>Open viewer</button>
+        </div>
         <div className="gvid-timeline-control-section" aria-label="Transport">
           <div className="gvid-timeline-control-title">Transport</div>
           <div className="gvid-timeline-group gvid-timeline-transport">
@@ -323,7 +331,7 @@ export function Timeline({ tabId }: { tabId: string }) {
               const scope = editScope();
               if (scope) void edit?.addTrack(scope);
             }}>+ Track</button>
-            <span>{tracks.length}</span>
+            <span>{tracks.length / 2} V / {tracks.length / 2} A</span>
           </div>
         </div>
         <div className="gvid-timeline-control-section" aria-label="History">
@@ -438,15 +446,30 @@ export function Timeline({ tabId }: { tabId: string }) {
               clearDropPreview();
             }
           }}>
-          {tracks.map((track) => <div key={track.id} className="gvid-timeline-row">
+          {tracks.map((track) => <div key={track.id} className={'gvid-timeline-row gvid-timeline-row-' + track.kind +
+            (track.kind === 'video' && track.hidden ? ' gvid-timeline-row-hidden' : '') +
+            (track.kind === 'audio' && track.muted ? ' gvid-timeline-row-muted' : '')}>
             <div className={'gvid-timeline-track-label ' + (selection?.trackId === track.id ? 'selected' : '')}>
               <button type="button" className="gvid-timeline-track-select"
                 title={track.locked ? `${track.label} locked` : track.label}
                 onClick={() => selectionTap?.set({ trackId: track.id, clipId: null })}>
                 <strong>{track.label}</strong>
               </button>
+              <button type="button" className="gvid-timeline-track-toggle"
+                aria-label={`${track.kind === 'video' ? 'Hide' : 'Mute'} ${track.label}`}
+                aria-pressed={track.kind === 'video' ? Boolean(track.hidden) : Boolean(track.muted)}
+                title={track.kind === 'video' ? `${track.hidden ? 'Show' : 'Hide'} ${track.label} in sequence viewer` :
+                  `${track.muted ? 'Unmute' : 'Mute'} ${track.label} in sequence viewer`}
+                disabled={!accepted || !edit}
+                onClick={() => {
+                  const scope = editScope();
+                  if (!scope || !edit) return;
+                  if (track.kind === 'video') void edit.setVideoHidden({ ...scope,
+                    trackId: track.id, hidden: !track.hidden });
+                  else void edit.setAudioMuted({ ...scope, trackId: track.id, muted: !track.muted });
+                }}>{track.kind === 'video' ? 'Hide' : 'Mute'}</button>
               <button type="button" className="gvid-timeline-track-delete" title={`Delete ${track.label}`}
-                aria-label={`Delete ${track.label}`} disabled={!accepted || !edit || tracks.length <= 1}
+                aria-label={`Delete ${track.label} and its paired track`} disabled={!accepted || !edit || tracks.length <= 2}
                 onClick={(event) => {
                   event.currentTarget.closest<HTMLElement>('.gvid-timeline')?.focus({ preventScroll: true });
                   const scope = editScope();
@@ -481,6 +504,10 @@ export function Timeline({ tabId }: { tabId: string }) {
                 }} />}
                 {track.clips.map((clip) => {
                   const asset = catalog.find((item) => item.id === clip.assetId);
+                  const linkedTrack = sequence?.tracks.find((item) => item.id ===
+                    track.id.replace(track.kind === 'video' ? /^v/ : /^a/,
+                      track.kind === 'video' ? 'a' : 'v'));
+                  const editLocked = track.locked || Boolean(clip.linkedClipId && linkedTrack?.locked);
                   const index = track.clips.indexOf(clip);
                   const previous = track.clips[index - 1];
                   const next = track.clips[index + 1];
@@ -500,7 +527,8 @@ export function Timeline({ tabId }: { tabId: string }) {
                     const max = edge === 'in' ? inMax : outMax;
                     const bounded = Math.max(min, Math.min(max, frameAtPointer(clientX, lane)));
                     return snapEnabled && sequence ? snapTimelineFrame(sequence, bounded, {
-                      pixelsPerFrame, anchors: snapAnchors, excludeClipId: clip.id,
+                      pixelsPerFrame, anchors: snapAnchors,
+                      excludeClipId: track.kind === 'audio' ? clip.linkedClipId : clip.id,
                       minFrame: min, maxFrame: max,
                     }) : bounded;
                   };
@@ -509,7 +537,7 @@ export function Timeline({ tabId }: { tabId: string }) {
                     title={`Trim ${edge === 'in' ? 'start' : 'end'} of ${asset?.displayName ?? clip.assetId}`}
                     aria-label={`Trim ${edge === 'in' ? 'start' : 'end'} of ${asset?.displayName ?? clip.assetId}`}
                     aria-keyshortcuts="Shift+ArrowLeft Shift+ArrowRight"
-                    disabled={!accepted || track.locked || !asset || asset.status !== 'ready' || !trimDraftTap || !edit}
+                    disabled={!accepted || editLocked || !asset || asset.status !== 'ready' || !trimDraftTap || !edit}
                     onClick={(event) => event.stopPropagation()}
                     onPointerDown={(event) => {
                       const scope = editScope();
@@ -563,13 +591,14 @@ export function Timeline({ tabId }: { tabId: string }) {
                     }}
                     />;
                   return <div key={clip.id}
-                    className={'gvid-timeline-clip ' + (selection?.clipId === clip.id ? 'selected' : '') +
-                      (preview?.clipId === clip.id && preview.sourceTrackId === track.id ? ' moving' : '')}
+                    className={'gvid-timeline-clip ' + (selection?.clipId === clip.id ||
+                      selection?.clipId === clip.linkedClipId ? 'selected' : '') +
+                      (preview?.clipId === clip.id || preview?.clipId === clip.linkedClipId ? ' moving' : '')}
                     style={{ left: visualIn * pixelsPerFrame, width: Math.max(1, (visualOut - visualIn) * pixelsPerFrame) }}
                     title={`${asset?.displayName ?? clip.assetId} source [${clip.sourceIn},${clip.sourceOut}) timeline [${visualIn},${visualOut})`}>
                     {trimHandle('in')}
                     <button type="button" className="gvid-timeline-clip-body"
-                    draggable={accepted && !track.locked && !!clipDragTap && !draft}
+                    draggable={accepted && !editLocked && !!clipDragTap && !draft}
                     onDragStart={(event) => {
                       const scope = editScope();
                       if (!scope || !clipDragTap) { event.preventDefault(); return; }
@@ -594,18 +623,28 @@ export function Timeline({ tabId }: { tabId: string }) {
                     {trimHandle('out')}
                   </div>;
                 })}
-                {preview?.resolvedTrackId === track.id && dropGhost}
+                {(preview?.resolvedTrackId === track.id || preview?.hasAudio &&
+                  track.id === preview.resolvedTrackId.replace(/^v(\d+)$/, 'a$1')) && dropGhost}
                 {target?.trackId === track.id && <span className="gvid-timeline-target-line" style={{ left: target.frame * pixelsPerFrame }} />}
                 {currentFrame !== null && <span className="gvid-timeline-playhead" style={{ left: currentFrame * pixelsPerFrame }} />}
               </div>
             </div>
           </div>)}
           {preview?.createsTrack && <div className="gvid-timeline-new-track-preview"
-            style={{ height: `${100 / (tracks.length + 1)}%` }}>
+            style={{ height: `${100 / (tracks.length + 2)}%` }}>
             <div className="gvid-timeline-track-label"><strong>{preview.resolvedTrackId.toUpperCase()}</strong></div>
             <div className="gvid-timeline-window">
               <div className="gvid-timeline-canvas" style={{ width, transform: `translateX(${-startFrame * pixelsPerFrame}px)` }}>
                 {dropGhost}
+              </div>
+            </div>
+          </div>}
+          {preview?.createsTrack && <div className="gvid-timeline-new-track-preview gvid-timeline-new-audio-preview"
+            style={{ height: `${100 / (tracks.length + 2)}%` }}>
+            <div className="gvid-timeline-track-label"><strong>{preview.resolvedTrackId.replace(/^v(\d+)$/, 'A$1')}</strong></div>
+            <div className="gvid-timeline-window">
+              <div className="gvid-timeline-canvas" style={{ width, transform: `translateX(${-startFrame * pixelsPerFrame}px)` }}>
+                {preview.hasAudio && dropGhost}
               </div>
             </div>
           </div>}

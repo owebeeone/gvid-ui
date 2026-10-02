@@ -6,7 +6,8 @@ import {
   GVID_TIMELINE_TRANSPORT, type AssetRecord, type ChangeStatus, type GraphView, type ProjectView,
   type SequenceView, type SourceDragSpan, type TimelineClipDrag,
 } from '@gvidjs/contracts';
-import { boundedFrame, clipBoundaryFrame, frameFromTimelineX, markState, projectDropPreview, snapTimelineFrame,
+import { boundedFrame, clipBoundaryFrame, frameFromTimelineX, markState, orderedTimelineTracks,
+  projectDropPreview, snapTimelineFrame,
   TimelineTabTap } from './timeline';
 
 const sequence: SequenceView = {
@@ -24,7 +25,7 @@ const project: ProjectView = {
 const asset: AssetRecord = {
   id: 'workshop', displayName: 'Workshop', version: 'v1', fingerprint: 'workshop/v1',
   streamId: 'workshop/video-0', frameCount: 90, width: 640, height: 360,
-  frameRate: { num: 24, den: 1 }, status: 'ready',
+  frameRate: { num: 24, den: 1 }, hasAudio: true, status: 'ready',
 };
 const sourceDrag: SourceDragSpan = {
   projectId: 'mock-a', sessionId: 'session-a', assetId: 'workshop', assetVersion: 'v1',
@@ -58,6 +59,25 @@ function setup(initialSequence: SequenceView = sequence) {
 afterEach(() => vi.useRealTimers());
 
 describe('timeline tab transport', () => {
+  it('orders V tracks high-to-low above A tracks low-to-high and projects both halves', () => {
+    const paired: SequenceView = { ...sequence, tracks: [
+      { ...sequence.tracks[0], clips: sequence.tracks[0].clips.map((clip) =>
+        ({ ...clip, linkedClipId: `audio-${clip.id}` })) },
+      { id: 'v2', label: 'V2', kind: 'video', locked: false, clips: [] },
+      { id: 'a1', label: 'A1', kind: 'audio', locked: false, clips: sequence.tracks[0].clips.map((clip) =>
+        ({ ...clip, id: `audio-${clip.id}`, linkedClipId: clip.id })) },
+      { id: 'a2', label: 'A2', kind: 'audio', locked: false, clips: [] },
+    ] };
+    expect(orderedTimelineTracks(paired).map((track) => track.id)).toEqual(['v2', 'v1', 'a1', 'a2']);
+    expect(projectDropPreview(paired, 'a2', 8, { kind: 'source', span: sourceDrag, asset }))
+      .toMatchObject({ targetTrackId: 'v2', resolvedTrackId: 'v2', hasAudio: true, frame: 8 });
+    expect(projectDropPreview(paired, 'a2', 10, { kind: 'clip', moving: {
+      ...clipDrag, sourceTrackId: 'a1', clipId: 'audio-a',
+    } })).toMatchObject({ targetTrackId: 'v2', sourceTrackId: 'a1',
+      resolvedTrackId: 'v2', hasAudio: true, frame: 9 });
+    expect(projectDropPreview(paired, 'a2', 8, { kind: 'source', span: sourceDrag,
+      asset: { ...asset, hasAudio: false } })).toBeNull();
+  });
   it('snaps clicks and drops to the nearest frame line, with ties biased left', () => {
     expect(frameFromTimelineX(139.9, 100, 0, 8)).toBe(5);
     expect(frameFromTimelineX(140, 100, 0, 8)).toBe(5);

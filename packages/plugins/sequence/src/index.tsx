@@ -2,6 +2,7 @@ import { addEntry, DESKTOP_PIN_TAB } from '@grythjs/plugin-api';
 import { useGrip } from '@owebeeone/grip-react';
 import {
   GVID_BINDING_VIEW, GVID_GRAPH_VIEW, GVID_PREVIEW_PLUGIN, GVID_PROJECT_VIEW,
+  GVID_SEQUENCE_AUDIO_CONTROL, GVID_SEQUENCE_AUDIO_VIEW,
   GVID_SEQUENCE_DESTINATION, GVID_SEQUENCE_PRESENTATION, GVID_TOOLS,
   type FrameResource,
 } from '@gvidjs/contracts';
@@ -40,6 +41,8 @@ function FrameSurface({ resource, state, reason }: {
 export function SequenceViewer({ tabId }: { tabId: string }) {
   const destination = useGrip(GVID_SEQUENCE_DESTINATION);
   const presentation = useGrip(GVID_SEQUENCE_PRESENTATION);
+  const audio = useGrip(GVID_SEQUENCE_AUDIO_VIEW);
+  const audioControl = useGrip(GVID_SEQUENCE_AUDIO_CONTROL);
   const project = useGrip(GVID_PROJECT_VIEW);
   const graph = useGrip(GVID_GRAPH_VIEW);
   const binding = useGrip(GVID_BINDING_VIEW);
@@ -69,6 +72,9 @@ export function SequenceViewer({ tabId }: { tabId: string }) {
       <span>Frame {frame ?? '--'}</span>
       <span>{presentation?.fidelity ?? '--'} fidelity</span>
       {presentation?.composition === 'mock-topmost-track' && <span>Mock topmost track</span>}
+      {audio?.state === 'playing' && <span>Audio {audio.activeTrackIds.join(', ')}</span>}
+      {audio?.state === 'blocked' && <button type="button" onClick={() => audioControl?.enable()}>Enable audio</button>}
+      {audio?.state === 'unavailable' && <span>Audio unavailable</span>}
       {presentation?.reason && state !== 'gap' && <span title={presentation.reason}>{presentation.reason}</span>}
     </div>
     <div className="gvid-sequence-identity">

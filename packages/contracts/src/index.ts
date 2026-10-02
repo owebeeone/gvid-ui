@@ -50,6 +50,7 @@ export interface AssetRecord {
   width: number;
   height: number;
   frameRate: Rational;
+  hasAudio: boolean;
   status: 'ready' | 'missing' | 'changed' | 'offline';
   reason?: string;
 }
@@ -62,6 +63,7 @@ export interface BindingView {
 
 export interface SequenceClip {
   id: string;
+  linkedClipId?: string;
   assetId: string;
   sourceIn: number;
   sourceOut: number;
@@ -72,8 +74,10 @@ export interface SequenceClip {
 export interface SequenceTrack {
   id: string;
   label: string;
-  kind: 'video';
+  kind: 'video' | 'audio';
   locked: boolean;
+  hidden?: boolean;
+  muted?: boolean;
   clips: readonly SequenceClip[];
 }
 
@@ -150,6 +154,16 @@ export interface DeleteTrack extends TimelineEditScope {
   trackId: string;
 }
 
+export interface SetVideoHidden extends TimelineEditScope {
+  trackId: string;
+  hidden: boolean;
+}
+
+export interface SetAudioMuted extends TimelineEditScope {
+  trackId: string;
+  muted: boolean;
+}
+
 export interface SelectedTimelineClip extends TimelineEditScope {
   trackId: string;
   clipId: string;
@@ -188,6 +202,8 @@ export interface EditorControl {
   place(intent: PlaceSourceSpan): Promise<EditorResult>;
   addTrack(intent: TimelineEditScope): Promise<EditorResult>;
   deleteTrack(intent: DeleteTrack): Promise<EditorResult>;
+  setVideoHidden(intent: SetVideoHidden): Promise<EditorResult>;
+  setAudioMuted(intent: SetAudioMuted): Promise<EditorResult>;
   copyClip(intent: SelectedTimelineClip): Promise<EditorResult>;
   cutClip(intent: SelectedTimelineClip): Promise<EditorResult>;
   pasteClip(intent: PasteTimelineClip): Promise<EditorResult>;
@@ -225,6 +241,7 @@ export interface TimelineDropProjection {
   targetTrackId: string;
   resolvedTrackId: string;
   createsTrack: boolean;
+  hasAudio: boolean;
   frame: number;
 }
 
@@ -379,6 +396,15 @@ export interface FramePresentation<K> {
   composition?: 'mock-single-track' | 'mock-topmost-track' | 'composite';
 }
 
+export interface SequenceAudioView {
+  state: 'silent' | 'playing' | 'blocked' | 'unavailable';
+  activeTrackIds: readonly string[];
+}
+
+export interface SequenceAudioControl {
+  enable(): void;
+}
+
 export interface FrameProvider {
   source(key: SourceFrameKey, asset: AssetRecord, signal: AbortSignal): Promise<FrameResult<SourceFrameKey>>;
   sequence(
@@ -448,3 +474,5 @@ export const GVID_SOURCE_FRAME_RESULT = defineGrip<FrameResult<SourceFrameKey> |
 export const GVID_SOURCE_PRESENTATION = defineGrip<FramePresentation<SourceFrameKey>>('Gvid.Source.Presentation');
 export const GVID_SEQUENCE_PREVIEW_RESULT = defineGrip<FrameResult<SequenceFrameKey> | null>('Gvid.Sequence.PreviewResult', null);
 export const GVID_SEQUENCE_PRESENTATION = defineGrip<FramePresentation<SequenceFrameKey>>('Gvid.Sequence.Presentation');
+export const GVID_SEQUENCE_AUDIO_VIEW = defineGrip<SequenceAudioView>('Gvid.Sequence.Audio.View');
+export const GVID_SEQUENCE_AUDIO_CONTROL = defineGrip<SequenceAudioControl>('Gvid.Sequence.Audio.Control');

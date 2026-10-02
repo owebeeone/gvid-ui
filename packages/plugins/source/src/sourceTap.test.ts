@@ -15,7 +15,7 @@ import { SOURCE_INSERT_STATE, SourceTabTap, sourceSpanFromMarks } from './source
 const lighthouse: AssetRecord = {
   id: 'lighthouse', displayName: 'Lighthouse', version: 'v1', fingerprint: 'light-1',
   streamId: 'video', frameCount: 120, width: 640, height: 360,
-  frameRate: { num: 24, den: 1 }, status: 'ready',
+  frameRate: { num: 24, den: 1 }, hasAudio: true, status: 'ready',
 };
 const workshop: AssetRecord = {
   ...lighthouse, id: 'workshop', displayName: 'Workshop', fingerprint: 'work-1', frameCount: 90,
@@ -58,6 +58,7 @@ function harness(sourceLink: DesktopTabLinkInfo = {
   }));
   const command = createAtomValueTap(GVID_EDIT_COMMAND, { initial: {
     insert, place: vi.fn(), addTrack: vi.fn(), deleteTrack: vi.fn(),
+    setVideoHidden: vi.fn(), setAudioMuted: vi.fn(),
     copyClip: vi.fn(), cutClip: vi.fn(), pasteClip: vi.fn(),
     deleteClip: vi.fn(), splitClip: vi.fn(), moveClip: vi.fn(), trimClip: vi.fn(),
   } satisfies EditorControl });

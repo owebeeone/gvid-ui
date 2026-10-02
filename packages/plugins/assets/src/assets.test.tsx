@@ -12,11 +12,11 @@ import { AssetSelectionTabTap } from './selection';
 
 const lighthouse: AssetRecord = {
   id: 'asset-a', displayName: 'Lighthouse', version: 'v1', fingerprint: 'a', streamId: 'v0',
-  frameCount: 120, width: 640, height: 360, frameRate: { num: 24, den: 1 }, status: 'ready',
+  frameCount: 120, width: 640, height: 360, frameRate: { num: 24, den: 1 }, hasAudio: true, status: 'ready',
 };
 const workshop: AssetRecord = {
   id: 'asset-b', displayName: 'Workshop', version: '2', fingerprint: 'b', streamId: 'v0',
-  frameCount: 90, width: 640, height: 360, frameRate: { num: 24, den: 1 },
+  frameCount: 90, width: 640, height: 360, frameRate: { num: 24, den: 1 }, hasAudio: true,
   status: 'missing', reason: 'Original file unavailable',
 };
 const changed: AssetRecord = {
@@ -96,7 +96,7 @@ describe('assets tab', () => {
     expect(markup).toContain('Original file unavailable');
     expect(markup).toContain('Fingerprint changed');
     expect(markup).toContain('120 frames');
-    expect(markup).toContain('120 frames | v1');
+    expect(markup).toContain('120 frames | A/V | v1');
     expect(markup).not.toContain('vv1');
     expect(markup).toContain('640 x 360');
     expect(markup).toContain('aria-pressed="true"');

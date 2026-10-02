@@ -66,6 +66,14 @@
 
 .gvid-sequence-status { border-top: 1px solid var(--border, #4b5157); }
 .gvid-sequence-status strong { text-transform: capitalize; }
+.gvid-sequence-status button {
+  background: transparent;
+  border: 1px solid var(--border, #5a6269);
+  border-radius: 3px;
+  color: inherit;
+  cursor: pointer;
+  padding: 3px 7px;
+}
 .gvid-sequence-identity {
   border-top: 1px solid var(--border, #4b5157);
   opacity: .75;
