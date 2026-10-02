@@ -350,6 +350,22 @@ describe('SourceTabTap', () => {
     h.close();
   });
 
+  it('steps one or ten frames and clamps at either source edge', () => {
+    const h = harness();
+    h.tap.step(1);
+    expect(h.read(GVID_DEST_SOURCE_FRAME)).toBe(1);
+    h.tap.step(10);
+    expect(h.read(GVID_DEST_SOURCE_FRAME)).toBe(11);
+    h.tap.step(-10);
+    expect(h.read(GVID_DEST_SOURCE_FRAME)).toBe(1);
+    h.tap.step(-10);
+    expect(h.read(GVID_DEST_SOURCE_FRAME)).toBe(0);
+    h.tap.seek(117);
+    h.tap.step(10);
+    expect(h.read(GVID_DEST_SOURCE_FRAME)).toBe(119);
+    h.close();
+  });
+
   it('pauses playback when seeking outside the marked range', () => {
     vi.useFakeTimers();
     const h = harness();

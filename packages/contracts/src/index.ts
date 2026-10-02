@@ -192,6 +192,23 @@ export interface TimelineClipDrag extends TimelineEditScope {
   grabOffsetFrames: number;
 }
 
+export interface TimelineDropProjection {
+  kind: 'source' | 'clip';
+  assetId: string;
+  sourceIn: number;
+  sourceOut: number;
+  sourceTrackId: string | null;
+  clipId: string | null;
+  targetTrackId: string;
+  resolvedTrackId: string;
+  createsTrack: boolean;
+  frame: number;
+}
+
+export interface TimelineDropPreview extends TimelineDropProjection, TimelineEditScope {
+  ownerTabId: string;
+}
+
 export interface TimelineTrimDraft extends TrimTimelineClip {
   pointerId: number;
 }
@@ -362,6 +379,8 @@ export const GVID_SOURCE_DRAG = defineGrip<SourceDragSpan | null>('Gvid.Source.D
 export const GVID_SOURCE_DRAG_TAP = defineGrip<AtomTapHandle<SourceDragSpan | null>>('Gvid.Source.Drag.Tap');
 export const GVID_TIMELINE_CLIP_DRAG = defineGrip<TimelineClipDrag | null>('Gvid.Timeline.ClipDrag', null);
 export const GVID_TIMELINE_CLIP_DRAG_TAP = defineGrip<AtomTapHandle<TimelineClipDrag | null>>('Gvid.Timeline.ClipDrag.Tap');
+export const GVID_TIMELINE_DROP_PREVIEW = defineGrip<TimelineDropPreview | null>('Gvid.Timeline.DropPreview', null);
+export const GVID_TIMELINE_DROP_PREVIEW_TAP = defineGrip<AtomTapHandle<TimelineDropPreview | null>>('Gvid.Timeline.DropPreview.Tap');
 export const GVID_TIMELINE_TRIM_DRAFT = defineGrip<TimelineTrimDraft | null>('Gvid.Timeline.TrimDraft', null);
 export const GVID_TIMELINE_TRIM_DRAFT_TAP = defineGrip<AtomTapHandle<TimelineTrimDraft | null>>('Gvid.Timeline.TrimDraft.Tap');
 export const GVID_ASSET_QUERY = defineGrip<string>('Gvid.Asset.Query', '');

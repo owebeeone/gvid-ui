@@ -6,7 +6,7 @@ import {
   GVID_SOURCE_DRAG_MIME, GVID_SOURCE_DRAG_TAP,
   GVID_SOURCE_FRAME_RESULT, GVID_SOURCE_LINK, GVID_SOURCE_MARKS, GVID_SOURCE_MARKS_CONTROL,
   GVID_SOURCE_PLUGIN, GVID_SOURCE_PRESENTATION, GVID_SOURCE_TRANSPORT,
-  GVID_SOURCE_TRANSPORT_CONTROL, GVID_TOOLS,
+  GVID_SOURCE_TRANSPORT_CONTROL, GVID_TIMELINE_DROP_PREVIEW_TAP, GVID_TOOLS,
 } from '@gvidjs/contracts';
 import { SOURCE_INSERT_CONTROL, SOURCE_INSERT_STATE, SourceTabTap, sourceSpanFromMarks } from './sourceTap';
 import './source.css';
@@ -28,6 +28,7 @@ export function SourceViewer() {
   const target = useGrip(GVID_ACTIVE_INSERT_TARGET);
   const project = useGrip(GVID_PROJECT_VIEW);
   const dragTap = useGrip(GVID_SOURCE_DRAG_TAP);
+  const dropPreviewTap = useGrip(GVID_TIMELINE_DROP_PREVIEW_TAP);
   const history = useGrip(GVID_HISTORY_VIEW);
   const historyControl = useGrip(GVID_HISTORY_CONTROL);
   const catalog = useGrip(GVID_ASSET_CATALOG) ?? [];
@@ -58,7 +59,12 @@ export function SourceViewer() {
             event.preventDefault();
             void (redo ? historyControl.redo() : historyControl.undo());
           }
-        } else if (!event.ctrlKey && !event.metaKey && !event.altKey && canNavigate) {
+        } else if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && canNavigate) {
+          if (key.startsWith('arrow') && controls) {
+            const delta = key === 'arrowleft' ? -1 : key === 'arrowright' ? 1 :
+              key === 'arrowup' ? 10 : key === 'arrowdown' ? -10 : 0;
+            if (delta) { event.preventDefault(); controls.step(delta); }
+          }
           if (key === 'i') { event.preventDefault(); markControls?.setIn(); }
           if (key === 'o') { event.preventDefault(); markControls?.setOut(); }
         }
@@ -82,12 +88,13 @@ export function SourceViewer() {
         title={canDrag ? 'Drag source span to timeline' : undefined}
         onDragStart={(event) => {
           if (!canDrag || !dragSpan || !asset || !destination?.projectId) { event.preventDefault(); return; }
+          dropPreviewTap?.set(null);
           dragTap.set({ projectId: destination.projectId, sessionId: destination.sessionId,
             assetId: asset.id, assetVersion: asset.version, viewerId: destination.viewerId, ...dragSpan });
           event.dataTransfer.effectAllowed = 'copy';
           event.dataTransfer.setData(GVID_SOURCE_DRAG_MIME, destination.viewerId);
         }}
-        onDragEnd={() => dragTap?.set(null)}>
+        onDragEnd={() => { dragTap?.set(null); dropPreviewTap?.set(null); }}>
         {png ? <img src={png} draggable={canDrag} alt={`${asset?.displayName ?? 'Source'} frame ${presentation?.key?.sourceFrame ?? 0}`} /> :
           <span>{presentation?.reason ?? destination?.reason ?? 'No frame'}</span>}
         <div className="gvid-source-status">

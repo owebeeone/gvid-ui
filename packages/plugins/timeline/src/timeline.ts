@@ -5,8 +5,9 @@ import {
   GVID_TIMELINE_MARKS, GVID_TIMELINE_MARKS_CONTROL, GVID_TIMELINE_SELECTION,
   GVID_TIMELINE_SELECTION_TAP, GVID_TIMELINE_TRANSPORT, GVID_TIMELINE_TRANSPORT_CONTROL,
   GVID_TIMELINE_VIEWPORT, GVID_TIMELINE_VIEWPORT_TAP,
-  type ChangeStatus, type FrameMarks, type GraphView, type MarksControl,
-  type ProjectView, type SequenceView, type TimelineSelection, type TimelineViewport,
+  type AssetRecord, type ChangeStatus, type FrameMarks, type GraphView, type MarksControl,
+  type ProjectView, type SequenceClip, type SequenceView, type SourceDragSpan, type TimelineClipDrag,
+  type TimelineDropProjection, type TimelineSelection, type TimelineViewport,
   type TransportControl, type TransportView,
 } from '@gvidjs/contracts';
 
@@ -24,6 +25,72 @@ export function frameFromTimelineX(clientX: number, left: number, startFrame: nu
 
 export function boundedFrame(frame: number, duration: number): number | null {
   return Number.isInteger(frame) && frame >= 0 && frame < duration ? frame : null;
+}
+
+export function clipBoundaryFrame(sequence: SequenceView, frame: number, direction: 'up' | 'down'): number {
+  if (boundedFrame(frame, sequence.durationFrames) === null) return frame;
+  let current: SequenceClip | null = null;
+  for (let index = sequence.tracks.length - 1; index >= 0; index--) {
+    current = sequence.tracks[index].clips.find((clip) => clip.timelineIn <= frame && frame < clip.timelineOut) ?? null;
+    if (current) break;
+  }
+  const edge = current && (direction === 'up' ? current.timelineIn : current.timelineOut - 1);
+  if (edge !== null && edge !== frame) return edge;
+  let next = frame;
+  for (const track of sequence.tracks) {
+    for (const clip of track.clips) {
+      const candidate = direction === 'up' ? clip.timelineOut - 1 : clip.timelineIn;
+      if (direction === 'up' && candidate < frame && (next === frame || candidate > next)) next = candidate;
+      if (direction === 'down' && candidate > frame && (next === frame || candidate < next)) next = candidate;
+    }
+  }
+  return next;
+}
+
+export function projectDropPreview(
+  sequence: SequenceView, targetTrackId: string, pointerFrame: number,
+  input: { kind: 'source'; span: SourceDragSpan; asset: AssetRecord } |
+    { kind: 'clip'; moving: TimelineClipDrag },
+): TimelineDropProjection | null {
+  const target = sequence.tracks.find((track) => track.id === targetTrackId);
+  if (!target || target.locked || !Number.isSafeInteger(pointerFrame) || pointerFrame < 0) return null;
+
+  let clip: Pick<SequenceClip, 'assetId' | 'sourceIn' | 'sourceOut'>;
+  let sourceTrackId: string | null = null;
+  let clipId: string | null = null;
+  let frame = pointerFrame;
+  if (input.kind === 'source') {
+    const { span, asset } = input;
+    if (asset.id !== span.assetId || asset.version !== span.assetVersion || asset.status !== 'ready' ||
+      asset.frameRate.num !== 24 || asset.frameRate.den !== 1 ||
+      !Number.isSafeInteger(span.sourceIn) || !Number.isSafeInteger(span.sourceOut) ||
+      span.sourceIn < 0 || span.sourceOut <= span.sourceIn || span.sourceOut > asset.frameCount) return null;
+    clip = { assetId: span.assetId, sourceIn: span.sourceIn, sourceOut: span.sourceOut };
+  } else {
+    const { moving } = input;
+    const source = sequence.tracks.find((track) => track.id === moving.sourceTrackId);
+    const found = source?.clips.find((item) => item.id === moving.clipId);
+    if (!source || source.locked || !found || !Number.isSafeInteger(moving.grabOffsetFrames) ||
+      moving.grabOffsetFrames < 0 || moving.grabOffsetFrames >= found.timelineOut - found.timelineIn) return null;
+    clip = found;
+    sourceTrackId = source.id;
+    clipId = found.id;
+    frame = Math.max(0, pointerFrame - moving.grabOffsetFrames);
+  }
+  const end = frame + clip.sourceOut - clip.sourceIn;
+  if (!Number.isSafeInteger(end)) return null;
+  const createsTrack = target.clips.some((item) =>
+    !(sourceTrackId === target.id && item.id === clipId) && item.timelineIn < end && frame < item.timelineOut);
+  const maxTrack = sequence.tracks.reduce((max, track) => {
+    const match = /^v(\d+)$/.exec(track.id);
+    return match ? Math.max(max, Number(match[1])) : max;
+  }, 0);
+  return {
+    kind: input.kind, assetId: clip.assetId, sourceIn: clip.sourceIn, sourceOut: clip.sourceOut,
+    sourceTrackId, clipId, targetTrackId,
+    resolvedTrackId: createsTrack ? `v${maxTrack + 1}` : targetTrackId,
+    createsTrack, frame,
+  };
 }
 
 export function markState(inFrame: number | null, outFrame: number | null, duration: number): FrameMarks {

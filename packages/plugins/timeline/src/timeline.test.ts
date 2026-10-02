@@ -3,10 +3,11 @@ import { createAtomValueTap, GripRegistry, Grok, type Grip } from '@owebeeone/gr
 import {
   GVID_CHANGE_STATUS, GVID_DEST_TIMELINE_FRAME, GVID_GRAPH_VIEW, GVID_PROJECT_VIEW,
   GVID_SEQUENCE_VIEW, GVID_TIMELINE_MARKS, GVID_TIMELINE_SELECTION,
-  GVID_TIMELINE_TRANSPORT, type ChangeStatus, type GraphView, type ProjectView,
-  type SequenceView,
+  GVID_TIMELINE_TRANSPORT, type AssetRecord, type ChangeStatus, type GraphView, type ProjectView,
+  type SequenceView, type SourceDragSpan, type TimelineClipDrag,
 } from '@gvidjs/contracts';
-import { boundedFrame, frameFromTimelineX, markState, TimelineTabTap } from './timeline';
+import { boundedFrame, clipBoundaryFrame, frameFromTimelineX, markState, projectDropPreview,
+  TimelineTabTap } from './timeline';
 
 const sequence: SequenceView = {
   id: 'main', graphId: 'graph-a', revision: 1, frameRate: { num: 24, den: 1 },
@@ -19,6 +20,19 @@ const sequence: SequenceView = {
 const project: ProjectView = {
   projectId: 'mock-a', sessionId: 'session-a', graphId: 'graph-a', revision: 1,
   bindingSetId: 'bindings-a', bindingRevision: 1, sessionOnly: true, status: 'ready',
+};
+const asset: AssetRecord = {
+  id: 'workshop', displayName: 'Workshop', version: 'v1', fingerprint: 'workshop/v1',
+  streamId: 'workshop/video-0', frameCount: 90, width: 640, height: 360,
+  frameRate: { num: 24, den: 1 }, status: 'ready',
+};
+const sourceDrag: SourceDragSpan = {
+  projectId: 'mock-a', sessionId: 'session-a', assetId: 'workshop', assetVersion: 'v1',
+  sourceIn: 10, sourceOut: 14, viewerId: 'source',
+};
+const clipDrag: TimelineClipDrag = {
+  projectId: 'mock-a', sessionId: 'session-a', expectedRevision: 1, sequenceId: 'main',
+  sourceTrackId: 'v1', clipId: 'a', grabOffsetFrames: 1,
 };
 
 function setup(initialSequence: SequenceView = sequence) {
@@ -53,6 +67,55 @@ describe('timeline tab transport', () => {
     expect(frameFromTimelineX(119.9, 100, 20, 4)).toBe(25);
     expect(frameFromTimelineX(80, 100, 20, 8)).toBe(17);
     expect(frameFromTimelineX(80, 100, 0, 8)).toBe(0);
+  });
+
+  it('projects source drops into the hovered track or a new top track on overlap', () => {
+    expect(projectDropPreview(sequence, 'v1', 8, { kind: 'source', span: sourceDrag, asset }))
+      .toMatchObject({ kind: 'source', frame: 8, sourceIn: 10, sourceOut: 14,
+        targetTrackId: 'v1', resolvedTrackId: 'v1', createsTrack: false });
+    expect(projectDropPreview(sequence, 'v1', 3, { kind: 'source', span: sourceDrag, asset }))
+      .toMatchObject({ frame: 3, targetTrackId: 'v1', resolvedTrackId: 'v2', createsTrack: true });
+    expect(projectDropPreview(sequence, 'v1', 3, { kind: 'source', span: { ...sourceDrag, sourceOut: 91 }, asset }))
+      .toBeNull();
+    expect(projectDropPreview(sequence, 'v1', 3, { kind: 'source', span: sourceDrag,
+      asset: { ...asset, version: 'v2' } })).toBeNull();
+  });
+
+  it('projects clip moves with grab offset and excludes the moving clip from collision', () => {
+    expect(projectDropPreview(sequence, 'v1', 1, { kind: 'clip', moving: clipDrag }))
+      .toMatchObject({ kind: 'clip', clipId: 'a', frame: 0, sourceIn: 12, sourceOut: 16,
+        resolvedTrackId: 'v1', createsTrack: false });
+    expect(projectDropPreview(sequence, 'v1', 6, { kind: 'clip', moving: clipDrag }))
+      .toMatchObject({ frame: 5, targetTrackId: 'v1', resolvedTrackId: 'v2', createsTrack: true });
+    expect(projectDropPreview(sequence, 'missing', 6, { kind: 'clip', moving: clipDrag })).toBeNull();
+    expect(projectDropPreview({ ...sequence, tracks: [{ ...sequence.tracks[0], locked: true }] }, 'v1', 6,
+      { kind: 'clip', moving: clipDrag })).toBeNull();
+  });
+
+  it('visits current clip edges before adjacent clip edges', () => {
+    expect(clipBoundaryFrame(sequence, 2, 'up')).toBe(0);
+    expect(clipBoundaryFrame(sequence, 0, 'up')).toBe(0);
+    expect(clipBoundaryFrame(sequence, 4, 'up')).toBe(3);
+    expect(clipBoundaryFrame(sequence, 1, 'down')).toBe(3);
+    expect(clipBoundaryFrame(sequence, 3, 'down')).toBe(4);
+    expect(clipBoundaryFrame(sequence, 6, 'down')).toBe(7);
+    expect(clipBoundaryFrame(sequence, 7, 'down')).toBe(7);
+  });
+
+  it('jumps across gaps and uses the topmost clip when tracks overlap', () => {
+    const withGap: SequenceView = { ...sequence, durationFrames: 12, tracks: [{ ...sequence.tracks[0], clips: [
+      { ...sequence.tracks[0].clips[0], timelineOut: 2, sourceOut: 14 },
+      { ...sequence.tracks[0].clips[1], timelineIn: 6, timelineOut: 10 },
+    ] }] };
+    expect(clipBoundaryFrame(withGap, 4, 'up')).toBe(1);
+    expect(clipBoundaryFrame(withGap, 4, 'down')).toBe(6);
+    expect(clipBoundaryFrame(withGap, 11, 'up')).toBe(9);
+    expect(clipBoundaryFrame(withGap, 11, 'down')).toBe(11);
+    const layered: SequenceView = { ...sequence, tracks: [...sequence.tracks, {
+      id: 'v2', label: 'V2', kind: 'video', locked: false,
+      clips: [{ id: 'top', assetId: 'workshop', sourceIn: 0, sourceOut: 2, timelineIn: 2, timelineOut: 4 }],
+    }] };
+    expect(clipBoundaryFrame(layered, 3, 'up')).toBe(2);
   });
 
   it('keeps exact pending, valid and invalid half-open marks', () => {
