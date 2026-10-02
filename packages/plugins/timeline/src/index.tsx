@@ -1,5 +1,5 @@
 import { addEntry, DESKTOP_OPEN_WIRED } from '@grythjs/plugin-api';
-import { useGrip } from '@owebeeone/grip-react';
+import { createAtomValueTap, useGrip } from '@owebeeone/grip-react';
 import {
   GVID_ACTIVE_INSERT_TARGET, GVID_ACTIVE_INSERT_TARGET_CONTROL, GVID_ASSET_CATALOG,
   GVID_BINDING_VIEW, GVID_CHANGE_STATUS, GVID_DEST_SEQUENCE_ID, GVID_DEST_SEQUENCE_ID_TAP,
@@ -9,6 +9,7 @@ import {
   GVID_TIMELINE_DROP_PREVIEW, GVID_TIMELINE_DROP_PREVIEW_TAP,
   GVID_TIMELINE_TRIM_DRAFT, GVID_TIMELINE_TRIM_DRAFT_TAP,
   GVID_TIMELINE_MARKS, GVID_TIMELINE_MARKS_CONTROL, GVID_TIMELINE_PLUGIN,
+  GVID_TIMELINE_MARKER_DRAFT, GVID_TIMELINE_MARKER_DRAFT_TAP,
   GVID_TIMELINE_SELECTION, GVID_TIMELINE_SELECTION_TAP, GVID_TIMELINE_TRANSPORT,
   GVID_TIMELINE_TRANSPORT_CONTROL, GVID_TIMELINE_VIEWPORT, GVID_TIMELINE_VIEWPORT_TAP,
   GVID_TOOLS, type SequenceTrack, type TimelineDropPreview,
@@ -47,6 +48,8 @@ export function Timeline({ tabId }: { tabId: string }) {
   const marksControl = useGrip(GVID_TIMELINE_MARKS_CONTROL);
   const selection = useGrip(GVID_TIMELINE_SELECTION);
   const selectionTap = useGrip(GVID_TIMELINE_SELECTION_TAP);
+  const markerDraft = useGrip(GVID_TIMELINE_MARKER_DRAFT);
+  const markerDraftTap = useGrip(GVID_TIMELINE_MARKER_DRAFT_TAP);
   const viewport = useGrip(GVID_TIMELINE_VIEWPORT);
   const viewportTap = useGrip(GVID_TIMELINE_VIEWPORT_TAP);
   const activeTarget = useGrip(GVID_ACTIVE_INSERT_TARGET);
@@ -89,6 +92,16 @@ export function Timeline({ tabId }: { tabId: string }) {
   const selectedClip = selection?.trackId && selection.clipId ?
     sequence?.tracks.find((track) => track.id === selection.trackId)
       ?.clips.find((clip) => clip.id === selection.clipId) : null;
+  const canMark = accepted && currentFrame !== null && !!selectedClip &&
+    currentFrame >= selectedClip.timelineIn && currentFrame < selectedClip.timelineOut &&
+    !sequence?.tracks.find((track) => track.id === selection?.trackId)?.locked &&
+    !selectedClip.markers?.some((marker) =>
+      marker.sourceFrame === selectedClip.sourceIn + currentFrame - selectedClip.timelineIn);
+  const draft = markerDraft;
+  const draftClip = draft && project && draft.sessionId === project.sessionId ?
+    sequence?.tracks.find((track) => track.id === draft.trackId)
+      ?.clips.find((clip) => clip.id === draft.clipId) : null;
+  const activeDraft = draft && draftClip?.markers?.some((marker) => marker.id === draft.markerId) ? draft : null;
   const target = accepted && activeTarget?.ownerTabId === tabId && activeTarget.projectId === project?.projectId &&
     activeTarget.graphId === graph?.graphId && activeTarget.sequenceId === sequenceId ? activeTarget : null;
   const rangeStart = marks && marks.validity !== 'unset' && marks.validity !== 'invalid' ? marks.inFrame ?? 0 : null;
@@ -183,6 +196,13 @@ export function Timeline({ tabId }: { tabId: string }) {
   const changeZoom = (next: number) => viewportTap?.set({
     startFrame, pixelsPerFrame: next, verticalScroll: viewport?.verticalScroll ?? 0, snapEnabled,
   });
+  const addMarker = () => {
+    const scope = editScope();
+    if (scope && canMark && selection?.trackId && selection.clipId && currentFrame !== null) {
+      void edit?.addClipMarker({ ...scope, trackId: selection.trackId,
+        clipId: selection.clipId, frame: currentFrame });
+    }
+  };
   const dropGhost = preview && <span className="gvid-timeline-drop-ghost"
     style={{ left: preview.frame * pixelsPerFrame,
       width: (preview.sourceOut - preview.sourceIn) * pixelsPerFrame }}
@@ -267,6 +287,10 @@ export function Timeline({ tabId }: { tabId: string }) {
             if (!event.repeat) viewportTap.set({ startFrame, pixelsPerFrame,
               verticalScroll: viewport?.verticalScroll ?? 0, snapEnabled: !snapEnabled });
           }
+          if (key === 'm' && panelShortcutTarget && canMark && edit) {
+            event.preventDefault();
+            if (!event.repeat) addMarker();
+          }
           if ((key === '=' || key === '-') && panelShortcutTarget && viewportTap) {
             event.preventDefault();
             if (!event.repeat) changeZoom(key === '=' ? pixelsPerFrame * 2 : pixelsPerFrame / 2);
@@ -337,6 +361,7 @@ export function Timeline({ tabId }: { tabId: string }) {
         <div className="gvid-timeline-control-section" aria-label="History">
           <div className="gvid-timeline-control-title">Edit</div>
           <div className="gvid-timeline-group">
+            <button type="button" disabled={!canMark || !edit} onClick={addMarker}>+ Marker</button>
             <button type="button" title={history?.undoLabel ?? 'Undo'} disabled={!accepted || !historyControl || !history?.canUndo || history.revision !== graph?.revision}
               onClick={() => void historyControl?.undo()}>Undo</button>
             <button type="button" title={history?.redoLabel ?? 'Redo'} disabled={!accepted || !historyControl || !history?.canRedo || history.revision !== graph?.revision}
@@ -377,6 +402,31 @@ export function Timeline({ tabId }: { tabId: string }) {
       </aside>
 
       <div className="gvid-timeline-workspace">
+        {activeDraft && <form className="gvid-timeline-marker-editor" role="dialog" aria-label="Edit clip marker"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const scope = editScope();
+            if (scope && edit) void edit.updateClipMarker({ ...scope, trackId: activeDraft.trackId,
+              clipId: activeDraft.clipId, markerId: activeDraft.markerId,
+              label: activeDraft.label, color: activeDraft.color });
+            markerDraftTap?.set(null);
+          }}>
+          <strong>Clip marker</strong>
+          <label>Label<input type="text" maxLength={80} value={activeDraft.label} autoFocus
+            onChange={(event) => markerDraftTap?.set({ ...activeDraft, label: event.target.value })} /></label>
+          <fieldset><legend>Color</legend>
+            {(['red', 'green', 'blue', 'yellow'] as const).map((color) => <label key={color} title={color}>
+              <input type="radio" name={`marker-color-${tabId}`} value={color} aria-label={color}
+                checked={activeDraft.color === color}
+                onChange={() => markerDraftTap?.set({ ...activeDraft, color })} />
+              <span className={`gvid-timeline-marker-swatch ${color}`} />
+            </label>)}
+          </fieldset>
+          <div className="gvid-timeline-marker-actions">
+            <button type="submit">Save</button>
+            <button type="button" onClick={() => markerDraftTap?.set(null)}>Cancel</button>
+          </div>
+        </form>}
         <div className="gvid-timeline-stage" ref={(stage) => {
           if (!stage) return;
           const onWheel = (event: WheelEvent) => {
@@ -635,6 +685,27 @@ export function Timeline({ tabId }: { tabId: string }) {
                     }}>
                     <strong>{asset?.displayName ?? clip.assetId}</strong>
                     </button>
+                    {(clip.markers ?? []).filter((marker) =>
+                      marker.sourceFrame >= clip.sourceIn && marker.sourceFrame < clip.sourceOut).map((marker) => {
+                      const markerFrame = clip.timelineIn + marker.sourceFrame - clip.sourceIn;
+                      return <button key={marker.id} type="button"
+                        className={`gvid-timeline-clip-marker ${marker.color}`}
+                        style={{ left: (marker.sourceFrame - clip.sourceIn + 0.5) * pixelsPerFrame }}
+                        title={marker.label || `Unlabeled marker at frame ${markerFrame}`}
+                        aria-label={`${marker.label || 'Unlabeled marker'} at timeline frame ${markerFrame}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          selectionTap?.set({ trackId: track.id, clipId: clip.id });
+                          transportControl?.seek(markerFrame);
+                        }}
+                        onDoubleClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          if (editLocked || !accepted) return;
+                          markerDraftTap?.set({ sessionId: project!.sessionId, trackId: track.id,
+                            clipId: clip.id, markerId: marker.id, label: marker.label, color: marker.color });
+                        }} />;
+                    })}
                     {trimHandle('out')}
                   </div>;
                 })}
@@ -678,7 +749,10 @@ addEntry(GVID_TIMELINE_PLUGIN, {
       label: 'Timeline',
       defaultSize: { w: 1100, h: 360 },
       role: 'timeline',
-      tabTaps: (tabId, params) => [new TimelineTabTap(tabId, typeof params?.sequenceId === 'string' ? params.sequenceId : null)],
+      tabTaps: (tabId, params) => [
+        new TimelineTabTap(tabId, typeof params?.sequenceId === 'string' ? params.sequenceId : null),
+        createAtomValueTap(GVID_TIMELINE_MARKER_DRAFT, { initial: null, handleGrip: GVID_TIMELINE_MARKER_DRAFT_TAP }),
+      ],
       windowComponent: Timeline,
     },
   },

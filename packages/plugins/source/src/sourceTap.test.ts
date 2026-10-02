@@ -61,6 +61,7 @@ function harness(sourceLink: DesktopTabLinkInfo = {
     setVideoHidden: vi.fn(), setAudioMuted: vi.fn(),
     copyClip: vi.fn(), cutClip: vi.fn(), pasteClip: vi.fn(),
     deleteClip: vi.fn(), splitClip: vi.fn(), moveClip: vi.fn(), trimClip: vi.fn(),
+    addClipMarker: vi.fn(), updateClipMarker: vi.fn(),
   } satisfies EditorControl });
   const requests: Array<{
     key: SourceFrameKey; asset: AssetRecord; signal: AbortSignal;

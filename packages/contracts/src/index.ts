@@ -69,6 +69,16 @@ export interface SequenceClip {
   sourceOut: number;
   timelineIn: number;
   timelineOut: number;
+  markers?: readonly ClipMarker[];
+}
+
+export type ClipMarkerColor = 'red' | 'green' | 'blue' | 'yellow';
+
+export interface ClipMarker {
+  id: string;
+  sourceFrame: number;
+  label: string;
+  color: ClipMarkerColor;
 }
 
 export interface SequenceTrack {
@@ -169,6 +179,16 @@ export interface SelectedTimelineClip extends TimelineEditScope {
   clipId: string;
 }
 
+export interface AddClipMarker extends SelectedTimelineClip {
+  frame: number;
+}
+
+export interface UpdateClipMarker extends SelectedTimelineClip {
+  markerId: string;
+  label: string;
+  color: ClipMarkerColor;
+}
+
 export interface DeleteTimelineClip extends SelectedTimelineClip {
   ripple: boolean;
 }
@@ -211,6 +231,8 @@ export interface EditorControl {
   splitClip(intent: SplitTimelineClip): Promise<EditorResult>;
   moveClip(intent: MoveTimelineClip): Promise<EditorResult>;
   trimClip(intent: TrimTimelineClip): Promise<EditorResult>;
+  addClipMarker(intent: AddClipMarker): Promise<EditorResult>;
+  updateClipMarker(intent: UpdateClipMarker): Promise<EditorResult>;
 }
 
 export interface SourceDragSpan {
@@ -329,6 +351,15 @@ export interface MarksControl {
 export interface TimelineSelection {
   trackId: string | null;
   clipId: string | null;
+}
+
+export interface TimelineMarkerDraft {
+  sessionId: string;
+  trackId: string;
+  clipId: string;
+  markerId: string;
+  label: string;
+  color: ClipMarkerColor;
 }
 
 export interface TimelineViewport {
@@ -459,6 +490,8 @@ export const GVID_TIMELINE_MARKS = defineGrip<FrameMarks>('Gvid.Timeline.Marks')
 export const GVID_TIMELINE_MARKS_CONTROL = defineGrip<MarksControl>('Gvid.Timeline.Marks.Control');
 export const GVID_TIMELINE_SELECTION = defineGrip<TimelineSelection>('Gvid.Timeline.Selection');
 export const GVID_TIMELINE_SELECTION_TAP = defineGrip<AtomTapHandle<TimelineSelection>>('Gvid.Timeline.Selection.Tap');
+export const GVID_TIMELINE_MARKER_DRAFT = defineGrip<TimelineMarkerDraft | null>('Gvid.Timeline.MarkerDraft', null);
+export const GVID_TIMELINE_MARKER_DRAFT_TAP = defineGrip<AtomTapHandle<TimelineMarkerDraft | null>>('Gvid.Timeline.MarkerDraft.Tap');
 export const GVID_TIMELINE_VIEWPORT = defineGrip<TimelineViewport>('Gvid.Timeline.Viewport');
 export const GVID_TIMELINE_VIEWPORT_TAP = defineGrip<AtomTapHandle<TimelineViewport>>('Gvid.Timeline.Viewport.Tap');
 

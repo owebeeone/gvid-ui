@@ -71,12 +71,94 @@ function expectLinkedPair(get: <T>(grip: Grip<T>) => T, number: number): void {
     expect(partner).toMatchObject({ linkedClipId: clip.id, assetId: clip.assetId,
       sourceIn: clip.sourceIn, sourceOut: clip.sourceOut,
       timelineIn: clip.timelineIn, timelineOut: clip.timelineOut });
+    expect(partner?.markers).toEqual(clip.markers);
   }
   expect(audio.clips).toHaveLength(video.clips.filter((clip) =>
     get(GVID_ASSET_CATALOG).find((asset) => asset.id === clip.assetId)?.hasAudio).length);
 }
 
 describe('mock editor root Grips', () => {
+  it('adds, edits, and undoes clip markers on the selected source frame', async () => {
+    const { get, scope } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const selected = () => ({ ...scope(), trackId: 'v1', clipId: 'clip-a' });
+    expect((await edit.addClipMarker({ ...selected(), frame: 48 })).status).toBe('rejected');
+    expect((await edit.addClipMarker({ ...selected(), frame: 10 })).status).toBe('accepted-session-only');
+    const marker = get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].markers![0];
+    expect(marker).toMatchObject({ sourceFrame: 22, label: '', color: 'red' });
+    expectLinkedPair(get, 1);
+    expect((await edit.addClipMarker({ ...selected(), frame: 10 })).status).toBe('rejected');
+    expect((await edit.updateClipMarker({ ...selected(), markerId: marker.id,
+      label: '  Entrance  ', color: 'blue' })).status).toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].markers![0]).toMatchObject({ label: 'Entrance', color: 'blue' });
+    expectLinkedPair(get, 1);
+    expect((await edit.updateClipMarker({ ...selected(), markerId: marker.id,
+      label: 'Entrance', color: 'purple' as 'red' })).status).toBe('rejected');
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].markers![0]).toMatchObject({ label: '', color: 'red' });
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].markers).toBeUndefined();
+    await get(GVID_HISTORY_CONTROL).redo();
+    await get(GVID_HISTORY_CONTROL).redo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].markers![0]).toMatchObject({ label: 'Entrance', color: 'blue' });
+    expect((await edit.addClipMarker({ ...scope(), trackId: 'a1', clipId: 'audio-clip-a', frame: 11 })).status)
+      .toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].markers?.[1].sourceFrame).toBe(23);
+    expectLinkedPair(get, 1);
+  });
+
+  it('keeps marker source frames through copy, move, trim, split, and linked audio', async () => {
+    const { get, scope, target } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const selected = () => ({ ...scope(), trackId: 'v1', clipId: 'clip-a' });
+    await edit.addClipMarker({ ...selected(), frame: 10 });
+    await edit.addClipMarker({ ...selected(), frame: 30 });
+    expect((await edit.copyClip(selected())).status).toBe('accepted-session-only');
+    expect((await edit.pasteClip({ ...scope(), target: target(96) })).status).toBe('accepted-session-only');
+    const pasted = get(GVID_SEQUENCE_VIEW).tracks[0].clips.find((clip) => clip.timelineIn === 96)!;
+    expect(pasted.markers?.map((marker) => marker.sourceFrame)).toEqual([22, 42]);
+    expectLinkedPair(get, 1);
+
+    await edit.addTrack(scope());
+    expect((await edit.moveClip({ ...scope(), sourceTrackId: 'a1', clipId: pasted.linkedClipId!,
+      target: { ...target(160), trackId: 'a2' } })).status).toBe('accepted-session-only');
+    const moved = get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v2')!.clips[0];
+    expect(moved.markers?.map((marker) => marker.sourceFrame)).toEqual([22, 42]);
+    expectLinkedPair(get, 2);
+
+    await edit.trimClip({ ...scope(), trackId: 'v2', clipId: moved.id, edge: 'in', frame: 175 });
+    const trimmed = get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v2')!.clips[0];
+    expect(trimmed.sourceIn).toBe(27);
+    expect(trimmed.markers?.map((marker) => marker.sourceFrame)).toEqual([22, 42]);
+    await edit.trimClip({ ...scope(), trackId: 'v2', clipId: moved.id, edge: 'in', frame: 160 });
+    expect((await edit.splitClip({ ...scope(), trackId: 'v2', frame: 184 })).status).toBe('accepted-session-only');
+    const halves = get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v2')!.clips;
+    expect(halves.map((clip) => clip.markers?.map((marker) => marker.sourceFrame))).toEqual([[22], [42]]);
+    expectLinkedPair(get, 2);
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v2')!.clips[0].markers)
+      .toHaveLength(2);
+  });
+
+  it('partitions markers when a ripple insert splits a clip', async () => {
+    const { get, scope, target, intent } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    await edit.addClipMarker({ ...scope(), trackId: 'v1', clipId: 'clip-a', frame: 10 });
+    await edit.addClipMarker({ ...scope(), trackId: 'v1', clipId: 'clip-a', frame: 30 });
+    get(GVID_ACTIVE_INSERT_TARGET_CONTROL).set(target(24));
+    expect((await edit.insert(intent(target(24)))).status).toBe('accepted-session-only');
+    const clips = get(GVID_SEQUENCE_VIEW).tracks[0].clips;
+    expect(clips[0].markers?.map((marker) => marker.sourceFrame)).toEqual([22]);
+    expect(clips[2].markers?.map((marker) => marker.sourceFrame)).toEqual([42]);
+    expectLinkedPair(get, 1);
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].markers?.map((marker) => marker.sourceFrame))
+      .toEqual([22, 42]);
+    const deleted = rippleDeleteSpan(get(GVID_SEQUENCE_VIEW), 16, 24, 'marker-delete')!;
+    expect(deleted.tracks[0].clips.filter((clip) => clip.assetId === 'lighthouse')
+      .map((clip) => clip.markers?.map((marker) => marker.sourceFrame))).toEqual([[22], [42]]);
+  });
+
   it('toggles video visibility and audio mute independently with undo and stale-scope checks', async () => {
     const { get, scope } = setup();
     const edit = get(GVID_EDIT_COMMAND);
