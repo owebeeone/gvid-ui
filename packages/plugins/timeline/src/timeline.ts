@@ -30,6 +30,19 @@ export function frameFromTimelineX(clientX: number, left: number, startFrame: nu
   return Math.max(0, lower + (frame - lower > 0.5 ? 1 : 0));
 }
 
+export function timelineWheelMovement(
+  wheel: { deltaX: number; deltaY: number; deltaMode: number; shiftKey: boolean },
+  pixelsPerFrame: number,
+  viewportHeight: number,
+): { axis: 'vertical'; pixels: number } | { axis: 'horizontal'; frames: number } {
+  const unit = wheel.deltaMode === 1 ? 16 : wheel.deltaMode === 2 ? viewportHeight : 1;
+  if (!wheel.shiftKey) return { axis: 'vertical', pixels: wheel.deltaY * unit };
+  const delta = Math.abs(wheel.deltaX) > Math.abs(wheel.deltaY) ? wheel.deltaX : wheel.deltaY;
+  const pixels = delta * unit;
+  return { axis: 'horizontal', frames: pixels === 0 ? 0 :
+    Math.sign(pixels) * Math.max(1, Math.round(Math.abs(pixels) / pixelsPerFrame)) };
+}
+
 export function boundedFrame(frame: number, duration: number): number | null {
   return Number.isInteger(frame) && frame >= 0 && frame < duration ? frame : null;
 }

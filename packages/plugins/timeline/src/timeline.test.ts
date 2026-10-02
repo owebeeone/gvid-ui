@@ -7,7 +7,7 @@ import {
   type SequenceView, type SourceDragSpan, type TimelineClipDrag,
 } from '@gvidjs/contracts';
 import { boundedFrame, clipBoundaryFrame, frameFromTimelineX, markState, orderedTimelineTracks,
-  projectDropPreview, snapTimelineFrame,
+  projectDropPreview, snapTimelineFrame, timelineWheelMovement,
   TimelineTabTap } from './timeline';
 
 const sequence: SequenceView = {
@@ -59,6 +59,17 @@ function setup(initialSequence: SequenceView = sequence) {
 afterEach(() => vi.useRealTimers());
 
 describe('timeline tab transport', () => {
+  it('routes wheel motion vertically and Shift+wheel horizontally', () => {
+    expect(timelineWheelMovement({ deltaX: 50, deltaY: 120, deltaMode: 0, shiftKey: false }, 8, 200))
+      .toEqual({ axis: 'vertical', pixels: 120 });
+    expect(timelineWheelMovement({ deltaX: 0, deltaY: 3, deltaMode: 1, shiftKey: false }, 8, 200))
+      .toEqual({ axis: 'vertical', pixels: 48 });
+    expect(timelineWheelMovement({ deltaX: 0, deltaY: 120, deltaMode: 0, shiftKey: true }, 8, 200))
+      .toEqual({ axis: 'horizontal', frames: 15 });
+    expect(timelineWheelMovement({ deltaX: -80, deltaY: 0, deltaMode: 0, shiftKey: true }, 8, 200))
+      .toEqual({ axis: 'horizontal', frames: -10 });
+  });
+
   it('orders V tracks high-to-low above A tracks low-to-high and projects both halves', () => {
     const paired: SequenceView = { ...sequence, tracks: [
       { ...sequence.tracks[0], clips: sequence.tracks[0].clips.map((clip) =>

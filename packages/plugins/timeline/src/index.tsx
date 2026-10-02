@@ -14,7 +14,7 @@ import {
   GVID_TOOLS, type SequenceTrack, type TimelineDropPreview,
 } from '@gvidjs/contracts';
 import { clipBoundaryFrame, frameFromTimelineX, orderedTimelineTracks, projectDropPreview,
-  snapTimelineFrame, TimelineTabTap } from './timeline';
+  snapTimelineFrame, timelineWheelMovement, TimelineTabTap } from './timeline';
 import './timeline.css';
 
 interface RulerGesture {
@@ -377,7 +377,23 @@ export function Timeline({ tabId }: { tabId: string }) {
       </aside>
 
       <div className="gvid-timeline-workspace">
-        <div className="gvid-timeline-stage">
+        <div className="gvid-timeline-stage" ref={(stage) => {
+          if (!stage) return;
+          const onWheel = (event: WheelEvent) => {
+            if (event.ctrlKey || event.metaKey) return;
+            const tracksNode = stage.querySelector<HTMLElement>('.gvid-timeline-tracks');
+            if (!tracksNode) return;
+            event.preventDefault();
+            const currentViewport = viewportTap?.get();
+            const movement = timelineWheelMovement(event, currentViewport?.pixelsPerFrame ?? pixelsPerFrame,
+              tracksNode.clientHeight);
+            if (movement.axis === 'vertical') tracksNode.scrollTop += movement.pixels;
+            else if (currentViewport && movement.frames) viewportTap?.set({ ...currentViewport,
+              startFrame: currentViewport.startFrame + movement.frames });
+          };
+          stage.addEventListener('wheel', onWheel, { passive: false });
+          return () => stage.removeEventListener('wheel', onWheel);
+        }}>
         <div className="gvid-timeline-track-label gvid-timeline-ruler-label">{duration}f</div>
         <div className="gvid-timeline-window gvid-timeline-ruler" role="slider" aria-label="Timeline playhead"
           aria-valuemin={0} aria-valuemax={Math.max(0, duration - 1)} aria-valuenow={currentFrame ?? 0} tabIndex={duration ? 0 : -1}
@@ -496,8 +512,7 @@ export function Timeline({ tabId }: { tabId: string }) {
                 clearDropPreview();
                 dragTap?.set(null);
                 clipDragTap?.set(null);
-              }}
-              onWheel={(event) => { if (viewportTap && viewport) { event.preventDefault(); viewportTap.set({ ...viewport, startFrame: startFrame + Math.sign(event.deltaY) * 12 }); } }}>
+              }}>
               <div className="gvid-timeline-canvas" style={{ width, transform: `translateX(${-startFrame * pixelsPerFrame}px)` }}>
                 {rangeStart !== null && <span className="gvid-timeline-range" style={{
                   left: rangeStart * pixelsPerFrame, width: (rangeEnd - rangeStart) * pixelsPerFrame,

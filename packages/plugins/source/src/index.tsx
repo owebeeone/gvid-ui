@@ -41,6 +41,8 @@ export function SourceViewer() {
   const png = presentation?.resource?.kind === 'mock-png' ? presentation.resource.objectUrl : undefined;
   const canNavigate = destination?.mode !== 'unresolved' && transport?.frame !== null &&
     transport?.frame !== undefined;
+  const addHint = insert?.disabledReason ?? (target ?
+    `Add to track ${target.trackId} at frame ${target.frame}` : 'Add selection');
 
   return (
     <section className="gvid-source" aria-label="Source viewer" tabIndex={0}
@@ -91,10 +93,6 @@ export function SourceViewer() {
         <div className="gvid-source-head-actions">
           <span className="gvid-source-mode">{destination?.mode === 'wired' ? 'Following library' :
             destination?.mode === 'standalone' ? 'Standalone' : 'Unresolved'}</span>
-          {link?.sourceTabId && <button type="button" title="Pin this source and frame" disabled={!pin || destination?.mode !== 'wired' || transport?.frame === null}
-            onClick={() => pin?.(link.tabId, {
-              projectId: destination?.projectId, assetId: destination?.assetId, frame: transport?.frame,
-            })}>Pin</button>}
         </div>
       </header>
 
@@ -119,20 +117,38 @@ export function SourceViewer() {
       </div>
 
       <div className="gvid-source-controls">
-        <div className="gvid-source-transport">
-          <button type="button" title="Step back one source frame" aria-label="Step back" disabled={!canNavigate || transport?.frame === 0}
-            onClick={() => controls?.step(-1)}>←</button>
-          <button type="button" title={transport?.playing ? 'Pause source' : 'Play source'}
-            disabled={!canNavigate || !!transport?.disabledReason}
-            onClick={() => transport?.playing ? controls?.pause() : controls?.play()}>
-            {transport?.playing ? 'Pause' : 'Play'}
-          </button>
-          <button type="button" title="Step forward one source frame" aria-label="Step forward"
-            disabled={!canNavigate || transport!.frame! >= transport!.frameCount - 1}
-            onClick={() => controls?.step(1)}>→</button>
-          <span className="gvid-source-counter">{transport?.frame === null || transport?.frame === undefined ? '--' : transport.frame + 1}
-            <span> / {transport?.frameCount ?? 0}</span>
-            {!!transport?.shuttleRate && <span> {transport.shuttleRate}x</span>}</span>
+        <div className="gvid-source-toolbar">
+          <div className="gvid-source-primary">
+            <button type="button" title="Step back one source frame" aria-label="Step back" disabled={!canNavigate || transport?.frame === 0}
+              onClick={() => controls?.step(-1)}>←</button>
+            <button type="button" title={transport?.playing ? 'Pause source' : 'Play source'}
+              disabled={!canNavigate || !!transport?.disabledReason}
+              onClick={() => transport?.playing ? controls?.pause() : controls?.play()}>
+              {transport?.playing ? 'Pause' : 'Play'}
+            </button>
+            <button type="button" title="Step forward one source frame" aria-label="Step forward"
+              disabled={!canNavigate || transport!.frame! >= transport!.frameCount - 1}
+              onClick={() => controls?.step(1)}>→</button>
+            <span className="gvid-source-counter">{transport?.frame === null || transport?.frame === undefined ? '--' : transport.frame + 1}
+              <span> / {transport?.frameCount ?? 0}</span>
+              {!!transport?.shuttleRate && <span> {transport.shuttleRate}x</span>}</span>
+            <button type="button" title="Set In" disabled={!canNavigate} onClick={() => markControls?.setIn()}>In</button>
+            <button type="button" title="Set Out" disabled={!canNavigate} onClick={() => markControls?.setOut()}>Out</button>
+            <button type="button" title="Clear source marks" disabled={!marks || marks.validity === 'unset'}
+              onClick={() => markControls?.clear()}>Clear</button>
+          </div>
+          <div className="gvid-source-actions">
+            {link?.sourceTabId && <button type="button" title="Pin this source and frame"
+              disabled={!pin || destination?.mode !== 'wired' || transport?.frame === null}
+              onClick={() => pin?.(link.tabId, {
+                projectId: destination?.projectId, assetId: destination?.assetId, frame: transport?.frame,
+              })}>Pin</button>}
+            <span className="gvid-source-add-slot" title={addHint}>
+              <button type="button" className="gvid-source-add" aria-label="Add selection"
+                disabled={!insert || !!insert.disabledReason || !insertControl}
+                onClick={() => { void insertControl?.addSelection(); }}>Add</button>
+            </span>
+          </div>
         </div>
         <div className="gvid-source-scrubber" aria-label="Source clip range">
           <div className="gvid-source-scrubber-track">
@@ -149,26 +165,13 @@ export function SourceViewer() {
             value={transport?.frame ?? 0} disabled={!canNavigate}
             onChange={(event) => controls?.seek(Number(event.currentTarget.value))} />
         </div>
-        <div className="gvid-source-marks">
-          <button type="button" disabled={!canNavigate} onClick={() => markControls?.setIn()}>Set In</button>
-          <button type="button" disabled={!canNavigate} onClick={() => markControls?.setOut()}>Set Out</button>
-          <button type="button" disabled={!marks || marks.validity === 'unset'} onClick={() => markControls?.clear()}>Clear</button>
-          {marks && marks.validity !== 'unset' && <span role="status">{marks.validity === 'valid' ? 'Range selected' :
-            marks?.validity === 'invalid' ? 'Invalid range' : marks?.inFrame !== null ? 'Set Out' : 'Set In'}</span>}
-        </div>
+        {marks && marks.validity !== 'unset' && <span className="gvid-source-sr-only" role="status">
+          {marks.validity === 'valid' ? 'Range selected' : marks.validity === 'invalid' ? 'Invalid range' :
+            marks.inFrame !== null ? 'Set Out' : 'Set In'}
+        </span>}
         {transport?.disabledReason && <p className="gvid-source-reason">{transport.disabledReason}</p>}
+        {insert?.message && <p className="gvid-source-feedback" role="status">{insert.message}</p>}
       </div>
-
-      <footer className="gvid-source-insert">
-        <div>
-          <strong>Insert selection</strong>
-          <span>{target ? `Track ${target.trackId} at frame ${target.frame}` : 'No timeline target'}</span>
-          {insert?.disabledReason && <small>{insert.disabledReason}</small>}
-          {insert?.message && <small role="status">{insert.message}</small>}
-        </div>
-        <button type="button" disabled={!insert || !!insert.disabledReason || !insertControl}
-          onClick={() => { void insertControl?.addSelection(); }}>Add</button>
-      </footer>
     </section>
   );
 }

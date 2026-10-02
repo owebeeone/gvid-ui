@@ -21,7 +21,7 @@
 .gvid-source button:disabled { opacity: .5; cursor: default; }
 .gvid-source button:focus-visible, .gvid-source input:focus-visible { outline: 2px solid #167b71; outline-offset: 2px; }
 
-.gvid-source-head, .gvid-source-transport, .gvid-source-marks, .gvid-source-insert {
+.gvid-source-head {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -33,10 +33,10 @@
   border-bottom: 1px solid #d7dfdc;
 }
 
-.gvid-source-identity, .gvid-source-insert > div { display: flex; flex-direction: column; min-width: 0; }
+.gvid-source-identity { display: flex; flex-direction: column; min-width: 0; }
 .gvid-source-head-actions { display: flex; align-items: center; gap: 8px; }
 .gvid-source-identity strong, .gvid-source-identity span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gvid-source-identity span, .gvid-source-insert span, .gvid-source-insert small { color: #58686c; }
+.gvid-source-identity span { color: #58686c; }
 .gvid-source-mode { flex: none; color: #286f67; }
 
 .gvid-source-surface {
@@ -68,33 +68,31 @@
   text-overflow: ellipsis;
 }
 
-.gvid-source-controls { display: grid; gap: 8px; padding: 10px 12px; }
-.gvid-source-transport { flex-wrap: wrap; }
-.gvid-source-counter { margin-left: auto; font-variant-numeric: tabular-nums; }
+.gvid-source-controls { display: grid; gap: 4px; padding: 6px 10px; }
+.gvid-source-toolbar, .gvid-source-primary, .gvid-source-actions { display: flex; align-items: center; }
+.gvid-source-toolbar { gap: 6px; min-width: 0; }
+.gvid-source-primary { flex: 1; gap: 4px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.gvid-source-actions { flex: none; gap: 4px; }
+.gvid-source-add-slot { display: inline-flex; }
+.gvid-source-add:disabled { pointer-events: none; }
+.gvid-source-toolbar button { flex: none; min-height: 28px; padding: 3px 6px; }
+.gvid-source-actions .gvid-source-add:not(:disabled) { background: #167b71; border-color: #167b71; color: white; }
+.gvid-source-counter { flex: none; padding: 0 3px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .gvid-source-counter span { color: #637373; }
-.gvid-source-scrubber { height: 24px; position: relative; }
-.gvid-source-scrubber-track { background: #cbd9d6; border-radius: 3px; height: 9px; left: 2px; overflow: visible; position: absolute; right: 2px; top: 8px; }
+.gvid-source-scrubber { height: 20px; position: relative; }
+.gvid-source-scrubber-track { background: #cbd9d6; border-radius: 3px; height: 9px; left: 2px; overflow: visible; position: absolute; right: 2px; top: 5px; }
 .gvid-source-range-selected { background: #32b19a; border-radius: 2px; height: 100%; position: absolute; top: 0; }
 .gvid-source-range-edge { background: #0e6e65; bottom: -4px; position: absolute; top: -4px; width: 2px; z-index: 1; }
-.gvid-source-scrubber input[type='range'] { appearance: none; background: transparent; height: 24px; margin: 0; position: absolute; width: 100%; }
+.gvid-source-scrubber input[type='range'] { appearance: none; background: transparent; height: 20px; margin: 0; position: absolute; width: 100%; }
 .gvid-source-scrubber input[type='range']::-webkit-slider-runnable-track { background: transparent; height: 9px; }
 .gvid-source-scrubber input[type='range']::-webkit-slider-thumb { appearance: none; background: #fff; border: 2px solid #126f67; border-radius: 50%; height: 16px; margin-top: -4px; width: 16px; }
 .gvid-source-scrubber input[type='range']::-moz-range-track { background: transparent; height: 9px; }
 .gvid-source-scrubber input[type='range']::-moz-range-thumb { background: #fff; border: 2px solid #126f67; border-radius: 50%; height: 13px; width: 13px; }
-.gvid-source-marks { flex-wrap: wrap; }
-.gvid-source-marks span { margin-left: auto; font-variant-numeric: tabular-nums; }
 .gvid-source-reason { margin: 0; color: #a14e28; }
-
-.gvid-source-insert {
-  justify-content: space-between;
-  padding: 10px 12px;
-  border-top: 1px solid #d7dfdc;
-}
-.gvid-source-insert > div { gap: 2px; }
-.gvid-source-insert button:not(:disabled) { background: #167b71; border-color: #167b71; color: white; }
+.gvid-source-feedback { margin: 0; color: #286f67; }
+.gvid-source-sr-only { clip: rect(0, 0, 0, 0); clip-path: inset(50%); height: 1px; overflow: hidden; position: absolute; white-space: nowrap; width: 1px; }
 
 @media (max-width: 430px) {
   .gvid-source-head { align-items: flex-start; }
   .gvid-source-mode { font-size: 11px; }
-  .gvid-source-marks span { width: 100%; margin-left: 0; }
 }
