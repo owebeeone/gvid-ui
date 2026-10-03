@@ -2,16 +2,21 @@ import { BaseTap, type Grip, type GripContext, type Grok } from '@owebeeone/grip
 import { DESKTOP_TAB_LINKS, type TabLinkInfo } from '@grythjs/plugin-api';
 import {
   GVID_ACTIVE_INSERT_TARGET, GVID_ACTIVE_INSERT_TARGET_CONTROL, GVID_ASSET_CATALOG,
-  GVID_BINDING_VIEW, GVID_CHANGE_STATUS, GVID_DEST_PROJECT_ID, GVID_EDIT_COMMAND,
+  GVID_BINDING_VIEW, GVID_CHANGE_STATUS, GVID_DEST_PROJECT_ID, GVID_EDIT_COMMAND, GVID_EFFECT_PROFILES,
   GVID_EDIT_RESULT, GVID_GRAPH_VIEW, GVID_HISTORY_CONTROL, GVID_HISTORY_VIEW,
   GVID_PROJECT_CONTROL, GVID_PROJECT_VIEW, GVID_SEQUENCE_VIEW, GVID_TOOLS,
-  type AddClipMarker, type AssetRecord, type BindingView, type ChangeStatus, type ClipMarker, type EditorControl,
+  GVID_SOURCE_MARKER_CATALOG,
+  NEUTRAL_EFFECTS, evaluateClipEffects, sameEffects, validEffects,
+  type AddClipKeyframe, type AddClipMarker, type AddSourceMarker, type ApplyEffectsProfile,
+  type AssetRecord, type BindingView, type ChangeStatus, type ClipEffectsState,
+  type ClipKeyframe, type ClipMarker, type DeleteClipKeyframe, type EditorControl, type EffectsProfile,
   type ChangeFootprint, type EditorResult, type GraphView, type HistoryControl, type HistoryView,
   type DeleteTimelineClip, type DeleteTrack, type InsertSourceSpan, type InsertTarget, type InsertTargetControl,
   type MoveTimelineClip, type PasteTimelineClip, type PlaceSourceSpan, type ProjectControl, type ProjectTransitionResult, type ProjectView,
-  type SelectedTimelineClip, type SetAudioMuted, type SetVideoHidden, type SplitTimelineClip,
+  type SaveEffectsProfile, type SelectedTimelineClip, type SetAudioMuted, type SetClipEffects,
+  type SetVideoHidden, type SplitTimelineClip,
   type SequenceClip, type SequenceTrack, type SequenceView, type TimelineEditScope,
-  type TrimTimelineClip, type UpdateClipMarker,
+  type SourceMarkerScope, type SourceMarkerSet, type TrimTimelineClip, type UpdateClipMarker, type UpdateSourceMarker,
 } from '@gvidjs/contracts';
 
 const RATE = Object.freeze({ num: 24, den: 1 });
@@ -29,7 +34,16 @@ const EMPTY_SEQUENCE: SequenceView = Object.freeze({
   id: '', graphId: '', revision: 0, frameRate: RATE, durationFrames: 0, tracks: Object.freeze([]),
 });
 
-interface JournalEntry { before: SequenceView; after: SequenceView; fromFrame: number; label: string }
+interface JournalEntry {
+  before: SequenceView;
+  after: SequenceView;
+  beforeProfiles?: readonly EffectsProfile[];
+  afterProfiles?: readonly EffectsProfile[];
+  beforeSourceMarkers?: readonly SourceMarkerSet[];
+  afterSourceMarkers?: readonly SourceMarkerSet[];
+  fromFrame: number;
+  label: string;
+}
 interface ClipClipboard {
   projectId: string;
   sessionId: string;
@@ -38,6 +52,8 @@ interface ClipClipboard {
   sourceIn: number;
   sourceOut: number;
   markers: readonly ClipMarker[];
+  keyframes: readonly ClipKeyframe[];
+  effects: ClipEffectsState;
 }
 interface State {
   project: ProjectView;
@@ -48,6 +64,8 @@ interface State {
   target: InsertTarget | null;
   result: EditorResult | null;
   clipboard: ClipClipboard | null;
+  sourceMarkers: readonly SourceMarkerSet[];
+  profiles: readonly EffectsProfile[];
   journal: readonly JournalEntry[];
   cursor: number;
 }
@@ -99,7 +117,7 @@ function initialState(projectId: 'mock-a' | 'mock-b'): State {
     }),
     graph: Object.freeze({ graphId: seq.graphId, revision: 1, sequence: seq }),
     assets, binding, change: Object.freeze({ state: 'live' }), target: null, result: null, clipboard: null,
-    journal: Object.freeze([]), cursor: 0,
+    sourceMarkers: Object.freeze([]), profiles: Object.freeze([]), journal: Object.freeze([]), cursor: 0,
   };
 }
 
@@ -113,7 +131,7 @@ function closedState(): State {
     assets: Object.freeze([]),
     binding: Object.freeze({ bindingSetId: '', revision: 0, byAssetId: Object.freeze({}) }),
     change: Object.freeze({ state: 'closed' }), target: null, result: null, clipboard: null,
-    journal: Object.freeze([]), cursor: 0,
+    sourceMarkers: Object.freeze([]), profiles: Object.freeze([]), journal: Object.freeze([]), cursor: 0,
   };
 }
 
@@ -128,6 +146,37 @@ function history(state: State): HistoryView {
 }
 
 function isFrame(value: number): boolean { return Number.isSafeInteger(value) && value >= 0; }
+function sourceMarkersInSpan(sets: readonly SourceMarkerSet[], asset: AssetRecord,
+  sourceIn: number, sourceOut: number): readonly ClipMarker[] {
+  return Object.freeze((sets.find((set) => set.assetId === asset.id && set.assetVersion === asset.version &&
+    set.fingerprint === asset.fingerprint)?.markers ?? []).filter((marker) =>
+    sourceIn <= marker.sourceFrame && marker.sourceFrame < sourceOut));
+}
+function replaceSourceMarkerSet(sets: readonly SourceMarkerSet[], asset: AssetRecord,
+  markers: readonly ClipMarker[]): readonly SourceMarkerSet[] {
+  const next: SourceMarkerSet = Object.freeze({ assetId: asset.id, assetVersion: asset.version,
+    fingerprint: asset.fingerprint, markers: Object.freeze([...markers]) });
+  return Object.freeze([...sets.filter((set) => set.assetId !== asset.id), next]);
+}
+function validSourceMarkers(sets: readonly SourceMarkerSet[], assets: readonly AssetRecord[]): boolean {
+  const assetIds = new Set<string>();
+  for (const set of sets) {
+    const asset = assets.find((item) => item.id === set.assetId && item.version === set.assetVersion &&
+      item.fingerprint === set.fingerprint);
+    if (!asset || assetIds.has(set.assetId)) return false;
+    assetIds.add(set.assetId);
+    const markerIds = new Set<string>();
+    const frames = new Set<number>();
+    for (const marker of set.markers) {
+      if (!marker.id || markerIds.has(marker.id) || frames.has(marker.sourceFrame) || !isFrame(marker.sourceFrame) ||
+        marker.sourceFrame >= asset.frameCount || typeof marker.label !== 'string' || marker.label.length > 80 ||
+        !['red', 'green', 'blue', 'yellow'].includes(marker.color)) return false;
+      markerIds.add(marker.id);
+      frames.add(marker.sourceFrame);
+    }
+  }
+  return true;
+}
 function videoTrackId(trackId: string): string {
   return trackId.replace(/^a(\d+)$/, 'v$1');
 }
@@ -195,12 +244,22 @@ function validateSequence(seq: SequenceView, assets: readonly AssetRecord[]): bo
           !isFrame(clip.timelineOut) || clip.timelineOut <= clip.timelineIn ||
           clip.timelineIn < previousEnd || clip.timelineOut > seq.durationFrames ||
           clip.sourceOut - clip.sourceIn !== clip.timelineOut - clip.timelineIn) return false;
+      if (clip.effects !== undefined && !validEffects(clip.effects)) return false;
       const markerIds = new Set<string>();
       for (const marker of clip.markers ?? []) {
         if (!marker.id || markerIds.has(marker.id) || !isFrame(marker.sourceFrame) ||
           marker.sourceFrame >= source.frameCount || typeof marker.label !== 'string' || marker.label.length > 80 ||
           !['red', 'green', 'blue', 'yellow'].includes(marker.color)) return false;
         markerIds.add(marker.id);
+      }
+      const keyframeIds = new Set<string>();
+      const keyframeFrames = new Set<number>();
+      for (const keyframe of clip.keyframes ?? []) {
+        if (!keyframe.id || keyframeIds.has(keyframe.id) || !isFrame(keyframe.sourceFrame) ||
+          keyframe.sourceFrame >= source.frameCount || keyframeFrames.has(keyframe.sourceFrame) ||
+          keyframe.effects !== undefined && !validEffects(keyframe.effects)) return false;
+        keyframeIds.add(keyframe.id);
+        keyframeFrames.add(keyframe.sourceFrame);
       }
       ids.add(clip.id);
       previousEnd = clip.timelineOut;
@@ -219,12 +278,21 @@ function validateSequence(seq: SequenceView, assets: readonly AssetRecord[]): bo
       if (clip.id !== paired.id || clip.linkedClipId !== paired.linkedClipId ||
         clip.assetId !== paired.assetId || clip.sourceIn !== paired.sourceIn ||
         clip.sourceOut !== paired.sourceOut || clip.timelineIn !== paired.timelineIn ||
-        clip.timelineOut !== paired.timelineOut) return false;
+        clip.timelineOut !== paired.timelineOut ||
+        (clip.effects === undefined) !== (paired.effects === undefined) ||
+        clip.effects && paired.effects && !sameEffects(clip.effects, paired.effects)) return false;
       const actualMarkers = clip.markers ?? [];
       const pairedMarkers = paired.markers ?? [];
       if (actualMarkers.length !== pairedMarkers.length || actualMarkers.some((marker, index) =>
         marker.id !== pairedMarkers[index].id || marker.sourceFrame !== pairedMarkers[index].sourceFrame ||
         marker.label !== pairedMarkers[index].label || marker.color !== pairedMarkers[index].color)) return false;
+      const actualKeyframes = clip.keyframes ?? [];
+      const pairedKeyframes = paired.keyframes ?? [];
+      if (actualKeyframes.length !== pairedKeyframes.length || actualKeyframes.some((keyframe, index) =>
+        keyframe.id !== pairedKeyframes[index].id || keyframe.sourceFrame !== pairedKeyframes[index].sourceFrame ||
+        (keyframe.effects === undefined) !== (pairedKeyframes[index].effects === undefined) ||
+        keyframe.effects && pairedKeyframes[index].effects &&
+          !sameEffects(keyframe.effects, pairedKeyframes[index].effects))) return false;
     }
   }
   return true;
@@ -239,6 +307,7 @@ function prepareSequence(seq: SequenceView | null, assets: readonly AssetRecord[
 function rippleInsert(
   seq: SequenceView, trackId: string, frame: number, source: AssetRecord,
   sourceIn: number, sourceOut: number, insertedId: string, splitId: string,
+  markers: readonly ClipMarker[] = [],
 ): SequenceView | null {
   const duration = sourceOut - sourceIn;
   const track = seq.tracks.find((item) => item.id === trackId);
@@ -256,17 +325,19 @@ function rippleInsert(
       else {
         const leftDuration = frame - clip.timelineIn;
         clips.push(Object.freeze({ ...clip, sourceOut: clip.sourceIn + leftDuration, timelineOut: frame,
-          markers: clip.markers?.filter((marker) => marker.sourceFrame < clip.sourceIn + leftDuration) }));
+          markers: clip.markers?.filter((marker) => marker.sourceFrame < clip.sourceIn + leftDuration),
+          keyframes: clip.keyframes?.filter((keyframe) => keyframe.sourceFrame < clip.sourceIn + leftDuration) }));
         clips.push(Object.freeze({
           ...clip, id: `${splitId}-${row.id}`, sourceIn: clip.sourceIn + leftDuration,
           timelineIn: frame + duration, timelineOut: clip.timelineOut + duration,
           markers: clip.markers?.filter((marker) => marker.sourceFrame >= clip.sourceIn + leftDuration),
+          keyframes: clip.keyframes?.filter((keyframe) => keyframe.sourceFrame >= clip.sourceIn + leftDuration),
         }));
       }
     }
     if (row.id === trackId) clips.push(Object.freeze({
       id: insertedId, assetId: source.id, sourceIn, sourceOut,
-      timelineIn: frame, timelineOut: frame + duration,
+      timelineIn: frame, timelineOut: frame + duration, markers,
     }));
     clips.sort((a, b) => a.timelineIn - b.timelineIn);
     return Object.freeze({ ...row, clips: Object.freeze(clips) });
@@ -288,13 +359,15 @@ function nextTrackId(seq: SequenceView): string {
 }
 
 function placeSpan(seq: SequenceView, trackId: string, frame: number, source: AssetRecord,
-  sourceIn: number, sourceOut: number, clipId: string, markers: readonly ClipMarker[] = []): SequenceView | null {
+  sourceIn: number, sourceOut: number, clipId: string, markers: readonly ClipMarker[] = [],
+  keyframes: readonly ClipKeyframe[] = [], effects?: ClipEffectsState): SequenceView | null {
   const track = seq.tracks.find((item) => item.id === trackId);
   const end = frame + sourceOut - sourceIn;
   if (!track || track.locked || source.hasAudio && seq.tracks.find((item) =>
     item.id === audioTrackId(trackId))?.locked || !isFrame(frame) || !Number.isSafeInteger(end)) return null;
   const clip: SequenceClip = Object.freeze({ id: clipId, assetId: source.id, sourceIn, sourceOut,
-    timelineIn: frame, timelineOut: end, markers: Object.freeze([...markers]) });
+    timelineIn: frame, timelineOut: end, markers: Object.freeze([...markers]),
+    keyframes: Object.freeze([...keyframes]), effects });
   const overlap = track.clips.some((item) => item.timelineIn < end && frame < item.timelineOut);
   const tracks = overlap ? Object.freeze([...seq.tracks, Object.freeze({
     id: nextTrackId(seq), label: nextTrackId(seq).toUpperCase(), kind: 'video' as const,
@@ -357,6 +430,24 @@ function setClipMarkers(seq: SequenceView, trackId: string, clipId: string,
       Object.freeze({ ...clip, markers: Object.freeze(markers) }) : clip)) }) : track)) });
 }
 
+function setClipKeyframes(seq: SequenceView, trackId: string, clipId: string,
+  keyframes: readonly ClipKeyframe[]): SequenceView {
+  return Object.freeze({ ...seq, tracks: Object.freeze(seq.tracks.map((track) => track.id === trackId ?
+    Object.freeze({ ...track, clips: Object.freeze(track.clips.map((clip) => clip.id === clipId ?
+      Object.freeze({ ...clip, keyframes: Object.freeze(keyframes) }) : clip)) }) : track)) });
+}
+
+function withClipEffects(seq: SequenceView, trackId: string, clipId: string,
+  keyframeId: string | null, effects: ClipEffectsState): SequenceView {
+  return Object.freeze({ ...seq, tracks: Object.freeze(seq.tracks.map((track) => track.id === trackId ?
+    Object.freeze({ ...track, clips: Object.freeze(track.clips.map((clip) => {
+      if (clip.id !== clipId) return clip;
+      if (keyframeId === null) return Object.freeze({ ...clip, effects: Object.freeze({ ...effects }) });
+      return Object.freeze({ ...clip, keyframes: Object.freeze((clip.keyframes ?? []).map((keyframe) =>
+        keyframe.id === keyframeId ? Object.freeze({ ...keyframe, effects: Object.freeze({ ...effects }) }) : keyframe)) });
+    })) }) : track)) });
+}
+
 export function rippleDeleteSpan(seq: SequenceView, start: number, end: number,
   splitId: string): SequenceView | null {
   if (!isFrame(start) || !isFrame(end) || start >= end || end > seq.durationFrames) return null;
@@ -372,12 +463,14 @@ export function rippleDeleteSpan(seq: SequenceView, start: number, end: number,
         const left = clip.timelineIn < start;
         if (left) clips.push(Object.freeze({ ...clip,
           sourceOut: clip.sourceIn + start - clip.timelineIn, timelineOut: start,
-          markers: clip.markers?.filter((marker) => marker.sourceFrame < clip.sourceIn + start - clip.timelineIn) }));
+          markers: clip.markers?.filter((marker) => marker.sourceFrame < clip.sourceIn + start - clip.timelineIn),
+          keyframes: clip.keyframes?.filter((keyframe) => keyframe.sourceFrame < clip.sourceIn + start - clip.timelineIn) }));
         if (clip.timelineOut > end) clips.push(Object.freeze({ ...clip,
           id: left ? `${splitId}-${track.id}-${clip.id}` : clip.id,
           sourceIn: clip.sourceOut - (clip.timelineOut - end),
           timelineIn: start, timelineOut: clip.timelineOut - duration,
-          markers: clip.markers?.filter((marker) => marker.sourceFrame >= clip.sourceOut - (clip.timelineOut - end)) }));
+          markers: clip.markers?.filter((marker) => marker.sourceFrame >= clip.sourceOut - (clip.timelineOut - end)),
+          keyframes: clip.keyframes?.filter((keyframe) => keyframe.sourceFrame >= clip.sourceOut - (clip.timelineOut - end)) }));
       }
     }
     return Object.freeze({ ...track, clips: Object.freeze(clips) });
@@ -393,6 +486,8 @@ class MockEditorRootTap extends BaseTap {
   private commandSerial = 0;
   private clipSerial = 0;
   private markerSerial = 0;
+  private keyframeSerial = 0;
+  private profileSerial = 0;
   private knownLinks: readonly TabLinkInfo[] | null = null;
   private readonly projectControl: ProjectControl = {
     open: (id, options) => this.open(id, options?.discardSessionEdits === true),
@@ -412,6 +507,13 @@ class MockEditorRootTap extends BaseTap {
     moveClip: (intent) => this.moveClip(intent), trimClip: (intent) => this.trimClip(intent),
     addClipMarker: (intent) => this.addClipMarker(intent),
     updateClipMarker: (intent) => this.updateClipMarker(intent),
+    addClipKeyframe: (intent) => this.addClipKeyframe(intent),
+    deleteClipKeyframe: (intent) => this.deleteClipKeyframe(intent),
+    setClipEffects: (intent) => this.setClipEffects(intent),
+    saveEffectsProfile: (intent) => this.saveEffectsProfile(intent),
+    applyEffectsProfile: (intent) => this.applyEffectsProfile(intent),
+    addSourceMarker: (intent) => this.addSourceMarker(intent),
+    updateSourceMarker: (intent) => this.updateSourceMarker(intent),
   };
   private readonly historyControl: HistoryControl = {
     undo: () => this.moveHistory('undo'), redo: () => this.moveHistory('redo'),
@@ -421,9 +523,10 @@ class MockEditorRootTap extends BaseTap {
     super({ provides: [
       GVID_DEST_PROJECT_ID, GVID_PROJECT_VIEW, GVID_PROJECT_CONTROL,
       GVID_GRAPH_VIEW, GVID_SEQUENCE_VIEW, GVID_CHANGE_STATUS,
-      GVID_ASSET_CATALOG, GVID_BINDING_VIEW,
+      GVID_ASSET_CATALOG, GVID_BINDING_VIEW, GVID_SOURCE_MARKER_CATALOG,
       GVID_ACTIVE_INSERT_TARGET, GVID_ACTIVE_INSERT_TARGET_CONTROL,
       GVID_EDIT_COMMAND, GVID_EDIT_RESULT, GVID_HISTORY_VIEW, GVID_HISTORY_CONTROL,
+      GVID_EFFECT_PROFILES,
     ], homeParamGrips: [DESKTOP_TAB_LINKS] });
   }
 
@@ -456,6 +559,8 @@ class MockEditorRootTap extends BaseTap {
     put(GVID_SEQUENCE_VIEW, this.state.graph.sequence);
     put(GVID_CHANGE_STATUS, this.state.change);
     put(GVID_ASSET_CATALOG, this.state.assets);
+    put(GVID_SOURCE_MARKER_CATALOG, this.state.sourceMarkers);
+    put(GVID_EFFECT_PROFILES, this.state.profiles);
     put(GVID_BINDING_VIEW, this.state.binding);
     put(GVID_ACTIVE_INSERT_TARGET, this.state.target);
     put(GVID_ACTIVE_INSERT_TARGET_CONTROL, this.targetControl);
@@ -475,6 +580,8 @@ class MockEditorRootTap extends BaseTap {
     }
     this.clipSerial = 0;
     this.markerSerial = 0;
+    this.keyframeSerial = 0;
+    this.profileSerial = 0;
     this.commit(initialState(id));
     return { status: 'opened', message: `Opened ${id}; session only.` };
   }
@@ -484,6 +591,8 @@ class MockEditorRootTap extends BaseTap {
     }
     this.clipSerial = 0;
     this.markerSerial = 0;
+    this.keyframeSerial = 0;
+    this.profileSerial = 0;
     this.commit(closedState());
     return { status: 'closed', message: 'Project closed.' };
   }
@@ -519,7 +628,8 @@ class MockEditorRootTap extends BaseTap {
     return Promise.resolve(result);
   }
   private accept(seq: SequenceView, journal: readonly JournalEntry[], cursor: number,
-    fromFrame: number, message: string, clipboard = this.state.clipboard): Promise<EditorResult> {
+    fromFrame: number, message: string, clipboard = this.state.clipboard,
+    sourceMarkers = this.state.sourceMarkers, profiles = this.state.profiles): Promise<EditorResult> {
     const revision = this.state.graph.revision + 1;
     const accepted = Object.freeze({ ...seq, revision });
     const footprint: ChangeFootprint = Object.freeze({
@@ -531,7 +641,8 @@ class MockEditorRootTap extends BaseTap {
     const graph = Object.freeze({ graphId: this.state.graph.graphId, revision, sequence: accepted });
     const target = this.state.target && this.state.target.frame <= accepted.durationFrames &&
       accepted.tracks.some((track) => track.id === this.state.target?.trackId) ? this.state.target : null;
-    this.commit({ ...this.state, project, graph, target, result, journal, cursor, clipboard });
+    this.commit({ ...this.state, project, graph, target, result, journal, cursor,
+      clipboard, sourceMarkers, profiles });
     return Promise.resolve(result);
   }
 
@@ -556,7 +667,8 @@ class MockEditorRootTap extends BaseTap {
     }
     const serial = this.clipSerial + 1;
     const next = rippleInsert(graph.sequence, target.trackId, target.frame, source,
-      intent.sourceIn, intent.sourceOut, `insert-${serial}`, `split-${serial}`);
+      intent.sourceIn, intent.sourceOut, `insert-${serial}`, `split-${serial}`,
+      sourceMarkersInSpan(this.state.sourceMarkers, source, intent.sourceIn, intent.sourceOut));
     const paired = prepareSequence(next, assets);
     if (!paired) return this.reject('Insert would create an invalid or locked track.');
     this.clipSerial = serial;
@@ -644,6 +756,8 @@ class MockEditorRootTap extends BaseTap {
       projectId: this.state.project.projectId!, sessionId: this.state.project.sessionId,
       assetId: asset.id, assetVersion: asset.version, sourceIn: clip.sourceIn, sourceOut: clip.sourceOut,
       markers: Object.freeze([...(clip.markers ?? [])]),
+      keyframes: Object.freeze([...(clip.keyframes ?? [])]),
+      effects: clip.effects ?? NEUTRAL_EFFECTS,
     }) };
   }
 
@@ -690,7 +804,8 @@ class MockEditorRootTap extends BaseTap {
     const frame = intent.target.frame;
     const serial = this.clipSerial + 1;
     const next = prepareSequence(placeSpan(graph.sequence, intent.target.trackId, frame, source,
-      clipboard.sourceIn, clipboard.sourceOut, `paste-${serial}`, clipboard.markers), assets);
+      clipboard.sourceIn, clipboard.sourceOut, `paste-${serial}`, clipboard.markers, clipboard.keyframes,
+      clipboard.effects), assets);
     if (!next) return this.reject('Clip cannot be pasted onto that track.');
     this.clipSerial = serial;
     const addedTrack = next.tracks.length > graph.sequence.tracks.length;
@@ -737,10 +852,12 @@ class MockEditorRootTap extends BaseTap {
     const serial = this.clipSerial + 1;
     const offset = intent.frame - clip.timelineIn;
     const left = Object.freeze({ ...clip, sourceOut: clip.sourceIn + offset, timelineOut: intent.frame,
-      markers: clip.markers?.filter((marker) => marker.sourceFrame < clip.sourceIn + offset) });
+      markers: clip.markers?.filter((marker) => marker.sourceFrame < clip.sourceIn + offset),
+      keyframes: clip.keyframes?.filter((keyframe) => keyframe.sourceFrame < clip.sourceIn + offset) });
     const right = Object.freeze({ ...clip, id: `split-${serial}`,
       sourceIn: clip.sourceIn + offset, timelineIn: intent.frame,
-      markers: clip.markers?.filter((marker) => marker.sourceFrame >= clip.sourceIn + offset) });
+      markers: clip.markers?.filter((marker) => marker.sourceFrame >= clip.sourceIn + offset),
+      keyframes: clip.keyframes?.filter((keyframe) => keyframe.sourceFrame >= clip.sourceIn + offset) });
     const next = prepareSequence(Object.freeze({ ...seq, tracks: Object.freeze(seq.tracks.map((row) => row.id === track.id ?
       Object.freeze({ ...row, clips: Object.freeze(row.clips.flatMap((item) =>
         item.id === clip.id ? [left, right] : [item])) }) : row)) }), this.state.assets);
@@ -772,7 +889,8 @@ class MockEditorRootTap extends BaseTap {
     const frame = intent.target.frame;
     const serial = this.clipSerial + 1;
     const next = prepareSequence(placeSpan(graph.sequence, intent.target.trackId, frame, source,
-      intent.sourceIn, intent.sourceOut, `place-${serial}`), assets);
+      intent.sourceIn, intent.sourceOut, `place-${serial}`,
+      sourceMarkersInSpan(this.state.sourceMarkers, source, intent.sourceIn, intent.sourceOut)), assets);
     if (!next) return this.reject('Drop would create an invalid or locked track.');
     this.clipSerial = serial;
     const addedTrack = next.tracks.length > graph.sequence.tracks.length;
@@ -877,6 +995,198 @@ class MockEditorRootTap extends BaseTap {
     return this.accept(next, journal, journal.length, fromFrame, 'Updated marker; session only.');
   }
 
+  private addClipKeyframe(intent: AddClipKeyframe): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const seq = this.state.graph.sequence;
+    const selected = videoSelection(seq, intent.trackId, intent.clipId);
+    const track = selected?.track;
+    const clip = selected?.clip;
+    if (!track || !clip || track.locked || linkedTrackLocked(seq, track.id, clip) ||
+      !isFrame(intent.frame) || intent.frame < clip.timelineIn || intent.frame >= clip.timelineOut) {
+      return this.reject('Select an unlocked clip frame to add a keyframe.');
+    }
+    const sourceFrame = clip.sourceIn + intent.frame - clip.timelineIn;
+    if (clip.keyframes?.some((keyframe) => keyframe.sourceFrame === sourceFrame)) {
+      return this.reject('This clip already has a keyframe at that frame.');
+    }
+    const serial = this.keyframeSerial + 1;
+    const keyframe: ClipKeyframe = Object.freeze({ id: `keyframe-${serial}`, sourceFrame,
+      effects: Object.freeze({ ...evaluateClipEffects(clip, intent.frame) }) });
+    const next = prepareSequence(setClipKeyframes(seq, track.id, clip.id,
+      [...(clip.keyframes ?? []), keyframe]), this.state.assets);
+    if (!next) return this.reject('Keyframe could not be added.');
+    this.keyframeSerial = serial;
+    const entry: JournalEntry = Object.freeze({ before: seq, after: next,
+      fromFrame: intent.frame, label: 'Add clip keyframe' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, intent.frame,
+      `Added keyframe at frame ${intent.frame}; session only.`);
+  }
+
+  private deleteClipKeyframe(intent: DeleteClipKeyframe): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const seq = this.state.graph.sequence;
+    const selected = videoSelection(seq, intent.trackId, intent.clipId);
+    const track = selected?.track;
+    const clip = selected?.clip;
+    const keyframe = clip?.keyframes?.find((item) => item.id === intent.keyframeId);
+    if (!track || !clip || !keyframe || track.locked || linkedTrackLocked(seq, track.id, clip)) {
+      return this.reject('Keyframe cannot be deleted from this clip.');
+    }
+    const frame = clip.timelineIn + keyframe.sourceFrame - clip.sourceIn;
+    const next = prepareSequence(setClipKeyframes(seq, track.id, clip.id,
+      clip.keyframes!.filter((item) => item.id !== keyframe.id)), this.state.assets);
+    if (!next) return this.reject('Keyframe could not be deleted.');
+    const entry: JournalEntry = Object.freeze({ before: seq, after: next,
+      fromFrame: frame, label: 'Delete clip keyframe' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, frame,
+      `Deleted keyframe at frame ${frame}; session only.`);
+  }
+
+  private setClipEffects(intent: SetClipEffects): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const seq = this.state.graph.sequence;
+    const selected = videoSelection(seq, intent.trackId, intent.clipId);
+    const track = selected?.track;
+    const clip = selected?.clip;
+    const keyframe = intent.keyframeId === null ? null :
+      clip?.keyframes?.find((item) => item.id === intent.keyframeId);
+    if (!track || !clip || track.locked || linkedTrackLocked(seq, track.id, clip) ||
+      !validEffects(intent.effects) || intent.keyframeId !== null &&
+        (!keyframe || keyframe.sourceFrame < clip.sourceIn || keyframe.sourceFrame >= clip.sourceOut)) {
+      return this.reject('Clip effects target or values are invalid.');
+    }
+    const current = keyframe?.effects ?? clip.effects ?? NEUTRAL_EFFECTS;
+    if (sameEffects(current, intent.effects)) return this.reject('Clip effects are unchanged.');
+    const next = prepareSequence(withClipEffects(seq, track.id, clip.id,
+      intent.keyframeId, intent.effects), this.state.assets);
+    if (!next) return this.reject('Clip effects could not be updated.');
+    const frame = keyframe ? clip.timelineIn + keyframe.sourceFrame - clip.sourceIn : clip.timelineIn;
+    const entry: JournalEntry = Object.freeze({ before: seq, after: next, fromFrame: frame,
+      label: keyframe ? 'Edit keyframe effects' : 'Edit clip effects' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, frame,
+      `${keyframe ? 'Keyframe' : 'Clip'} effects updated; session only.`);
+  }
+
+  private saveEffectsProfile(intent: SaveEffectsProfile): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const seq = this.state.graph.sequence;
+    const selected = videoSelection(seq, intent.trackId, intent.clipId);
+    const clip = selected?.clip;
+    const name = intent.name.trim();
+    if (!clip || !name || name.length > 80) return this.reject('Select a clip and enter a profile name.');
+    const prior = this.state.profiles.find((item) => item.name.toLowerCase() === name.toLowerCase());
+    const serial = this.profileSerial + (prior ? 0 : 1);
+    const profile: EffectsProfile = Object.freeze({
+      id: prior?.id ?? `effects-profile-${serial}`, name, version: (prior?.version ?? 0) + 1,
+      base: Object.freeze({ ...(clip.effects ?? NEUTRAL_EFFECTS) }),
+      keyframes: Object.freeze((clip.keyframes ?? []).filter((item) =>
+        item.sourceFrame >= clip.sourceIn && item.sourceFrame < clip.sourceOut)
+        .map((item) => Object.freeze({ offset: item.sourceFrame - clip.sourceIn,
+          effects: Object.freeze({ ...(item.effects ?? evaluateClipEffects(clip,
+            clip.timelineIn + item.sourceFrame - clip.sourceIn)) }) }))),
+    });
+    const profiles = Object.freeze([...this.state.profiles.filter((item) => item.id !== prior?.id), profile]);
+    const entry: JournalEntry = Object.freeze({ before: seq, after: seq,
+      beforeProfiles: this.state.profiles, afterProfiles: profiles,
+      fromFrame: clip.timelineIn, label: prior ? 'Update effects profile' : 'Save effects profile' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    this.profileSerial = serial;
+    return this.accept(seq, journal, journal.length, clip.timelineIn,
+      `${prior ? 'Updated' : 'Saved'} effects profile ${name}; session only.`,
+      this.state.clipboard, this.state.sourceMarkers, profiles);
+  }
+
+  private applyEffectsProfile(intent: ApplyEffectsProfile): Promise<EditorResult> {
+    if (!this.validEditScope(intent)) return this.reject('Project, session, or graph revision is stale.');
+    const seq = this.state.graph.sequence;
+    const selected = videoSelection(seq, intent.trackId, intent.clipId);
+    const track = selected?.track;
+    const clip = selected?.clip;
+    const profile = this.state.profiles.find((item) => item.id === intent.profileId &&
+      item.version === intent.profileVersion);
+    if (!track || !clip || track.locked || linkedTrackLocked(seq, track.id, clip) || !profile) {
+      return this.reject('Effects profile or target clip is unavailable.');
+    }
+    const duration = clip.timelineOut - clip.timelineIn;
+    if (!validEffects(profile.base) || profile.keyframes.some((item) =>
+      !isFrame(item.offset) || item.offset >= duration || !validEffects(item.effects))) {
+      return this.reject('Effects profile keyframes do not fit this clip.');
+    }
+    const keyframes = Object.freeze(profile.keyframes.map((item, index) => Object.freeze({
+      id: `keyframe-${this.keyframeSerial + index + 1}`,
+      sourceFrame: clip.sourceIn + item.offset, effects: Object.freeze({ ...item.effects }),
+    })));
+    const replaced = setClipKeyframes(withClipEffects(seq, track.id, clip.id, null, profile.base),
+      track.id, clip.id, keyframes);
+    const next = prepareSequence(replaced, this.state.assets);
+    if (!next) return this.reject('Effects profile could not be applied.');
+    this.keyframeSerial += keyframes.length;
+    const entry: JournalEntry = Object.freeze({ before: seq, after: next, fromFrame: clip.timelineIn,
+      label: 'Apply effects profile' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(next, journal, journal.length, clip.timelineIn,
+      `Applied ${profile.name} to clip; session only.`);
+  }
+
+  private sourceMarkerAsset(intent: SourceMarkerScope): AssetRecord | null {
+    const { project, graph, assets, binding, change } = this.state;
+    if (project.status !== 'ready' || change.state !== 'live' ||
+      intent.projectId !== project.projectId || intent.sessionId !== project.sessionId ||
+      intent.expectedRevision !== graph.revision) return null;
+    const asset = assets.find((item) => item.id === intent.assetId);
+    return asset?.status === 'ready' && asset.version === intent.assetVersion &&
+      asset.fingerprint === intent.fingerprint && !!binding.byAssetId[asset.id] ? asset : null;
+  }
+
+  private addSourceMarker(intent: AddSourceMarker): Promise<EditorResult> {
+    const asset = this.sourceMarkerAsset(intent);
+    if (!asset || !isFrame(intent.frame) || intent.frame >= asset.frameCount) {
+      return this.reject('Source marker target is stale or outside the asset.');
+    }
+    const markers = sourceMarkersInSpan(this.state.sourceMarkers, asset, 0, asset.frameCount);
+    if (markers.some((marker) => marker.sourceFrame === intent.frame)) {
+      return this.reject('This source already has a marker at that frame.');
+    }
+    const serial = this.markerSerial + 1;
+    const marker: ClipMarker = Object.freeze({ id: `source-marker-${serial}`,
+      sourceFrame: intent.frame, label: '', color: 'red' });
+    const nextSourceMarkers = replaceSourceMarkerSet(this.state.sourceMarkers, asset, [...markers, marker]);
+    if (!validSourceMarkers(nextSourceMarkers, this.state.assets)) return this.reject('Source marker could not be added.');
+    this.markerSerial = serial;
+    const seq = this.state.graph.sequence;
+    const entry: JournalEntry = Object.freeze({ before: seq, after: seq,
+      beforeSourceMarkers: this.state.sourceMarkers, afterSourceMarkers: nextSourceMarkers,
+      fromFrame: 0, label: 'Add source marker' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(seq, journal, journal.length, 0,
+      `Added source marker at frame ${intent.frame}; session only.`, this.state.clipboard, nextSourceMarkers);
+  }
+
+  private updateSourceMarker(intent: UpdateSourceMarker): Promise<EditorResult> {
+    const asset = this.sourceMarkerAsset(intent);
+    const markers = asset ? sourceMarkersInSpan(this.state.sourceMarkers, asset, 0, asset.frameCount) : [];
+    const marker = markers.find((item) => item.id === intent.markerId);
+    if (!asset || !marker || typeof intent.label !== 'string' || intent.label.trim().length > 80 ||
+      !['red', 'green', 'blue', 'yellow'].includes(intent.color)) {
+      return this.reject('Source marker edit is invalid or stale.');
+    }
+    const label = intent.label.trim();
+    if (marker.label === label && marker.color === intent.color) return this.reject('Marker is unchanged.');
+    const nextSourceMarkers = replaceSourceMarkerSet(this.state.sourceMarkers, asset,
+      markers.map((item) => item.id === marker.id ? Object.freeze({ ...item, label, color: intent.color }) : item));
+    if (!validSourceMarkers(nextSourceMarkers, this.state.assets)) return this.reject('Source marker could not be updated.');
+    const seq = this.state.graph.sequence;
+    const entry: JournalEntry = Object.freeze({ before: seq, after: seq,
+      beforeSourceMarkers: this.state.sourceMarkers, afterSourceMarkers: nextSourceMarkers,
+      fromFrame: 0, label: 'Edit source marker' });
+    const journal = Object.freeze([...this.state.journal.slice(0, this.state.cursor), entry]);
+    return this.accept(seq, journal, journal.length, 0,
+      'Updated source marker; session only.', this.state.clipboard, nextSourceMarkers);
+  }
+
   private moveHistory(direction: 'undo' | 'redo'): Promise<EditorResult> {
     const { journal, cursor, project } = this.state;
     if (project.status !== 'ready' || this.state.change.state !== 'live') return this.reject('Project is closed or stale.');
@@ -884,9 +1194,16 @@ class MockEditorRootTap extends BaseTap {
     if (direction === 'redo' && cursor === journal.length) return this.reject('Nothing to redo.');
     const entry = journal[direction === 'undo' ? cursor - 1 : cursor];
     const next = direction === 'undo' ? entry.before : entry.after;
-    if (!validateSequence(next, this.state.assets)) return this.reject('History state is invalid.');
+    const sourceMarkers = direction === 'undo' ? entry.beforeSourceMarkers ?? this.state.sourceMarkers :
+      entry.afterSourceMarkers ?? this.state.sourceMarkers;
+    const profiles = direction === 'undo' ? entry.beforeProfiles ?? this.state.profiles :
+      entry.afterProfiles ?? this.state.profiles;
+    if (!validateSequence(next, this.state.assets) || !validSourceMarkers(sourceMarkers, this.state.assets)) {
+      return this.reject('History state is invalid.');
+    }
     return this.accept(next, journal, cursor + (direction === 'undo' ? -1 : 1), entry.fromFrame,
-      `${direction === 'undo' ? 'Undid' : 'Redid'} ${entry.label.toLowerCase()}; session only.`);
+      `${direction === 'undo' ? 'Undid' : 'Redid'} ${entry.label.toLowerCase()}; session only.`,
+      this.state.clipboard, sourceMarkers, profiles);
   }
 }
 

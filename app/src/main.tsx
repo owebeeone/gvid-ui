@@ -1,6 +1,7 @@
 import './style.css';
 import '@grythjs/plugin-settings';
 import '@gvidjs/plugin-assets';
+import '@gvidjs/plugin-effects';
 import '@gvidjs/plugin-source';
 import '@gvidjs/plugin-sequence';
 import '@gvidjs/plugin-timeline';

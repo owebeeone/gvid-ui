@@ -9,7 +9,8 @@ import {
   type AssetRecord, type BindingView, type FrameProvider, type FrameResult,
   type GraphView, type ProjectView, type SequenceFrameKey, type SequenceView,
 } from '@gvidjs/contracts';
-import { resolveSequenceDestination, sequencePresentation, sequenceTabTaps, topmostClipAt } from './taps';
+import { resolveSequenceDestination, SequencePreviewProviderTap,
+  sequencePresentation, sequenceTabTaps, topmostClipAt } from './taps';
 
 const clips = [
   { id: 'a', assetId: 'lighthouse', sourceIn: 12, sourceOut: 60, timelineIn: 0, timelineOut: 48 },
@@ -141,7 +142,8 @@ describe('sequence request lifecycle', () => {
     timeline.getGripHomeContext().registerTap(createAtomValueTap(GVID_DEST_TIMELINE_FRAME, { initial: 31 }));
     const viewer = grok.mainPresentationContext.getOrCreateMatchingContext('tab:viewer');
     const home = viewer.getGripHomeContext();
-    for (const tap of sequenceTabTaps('viewer')) home.registerTap(tap);
+    const tabTaps = sequenceTabTaps('viewer');
+    for (const tap of tabTaps) home.registerTap(tap);
     home.addParent(timeline.getGripHomeContext(), -1);
     grok.resolver.addParent(home, timeline.getGripHomeContext());
     const presentation = viewer.getGripConsumerContext().getOrCreateConsumer(GVID_SEQUENCE_PRESENTATION);
@@ -149,6 +151,10 @@ describe('sequence request lifecycle', () => {
     grok.flush();
     await expect.poll(() => presentation.get()?.state).toBe('current');
     expect(seen.at(-1)).toBe('Lighthouse');
+
+    const previewTap = tabTaps.find((tap) => tap instanceof SequencePreviewProviderTap)!;
+    home.unregisterTap(previewTap);
+    home.registerTap(previewTap);
 
     const hidden = { ...layered, revision: 8, tracks: [layered.tracks[0], { ...layered.tracks[1], hidden: true }] };
     projectTap.set({ ...project, revision: 8 });

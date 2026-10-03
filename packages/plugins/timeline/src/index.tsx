@@ -3,6 +3,7 @@ import { createAtomValueTap, useGrip } from '@owebeeone/grip-react';
 import {
   GVID_ACTIVE_INSERT_TARGET, GVID_ACTIVE_INSERT_TARGET_CONTROL, GVID_ASSET_CATALOG,
   GVID_BINDING_VIEW, GVID_CHANGE_STATUS, GVID_DEST_SEQUENCE_ID, GVID_DEST_SEQUENCE_ID_TAP,
+  GVID_EFFECTS_FOCUS, GVID_EFFECTS_FOCUS_TAP,
   GVID_EDIT_COMMAND, GVID_EDIT_RESULT, GVID_GRAPH_VIEW, GVID_HISTORY_CONTROL, GVID_HISTORY_VIEW,
   GVID_PROJECT_VIEW, GVID_SEQUENCE_VIEW, GVID_SOURCE_DRAG_MIME, GVID_SOURCE_DRAG_TAP,
   GVID_TIMELINE_CLIP_DRAG_MIME, GVID_TIMELINE_CLIP_DRAG_TAP,
@@ -12,7 +13,7 @@ import {
   GVID_TIMELINE_MARKER_DRAFT, GVID_TIMELINE_MARKER_DRAFT_TAP,
   GVID_TIMELINE_SELECTION, GVID_TIMELINE_SELECTION_TAP, GVID_TIMELINE_TRANSPORT,
   GVID_TIMELINE_TRANSPORT_CONTROL, GVID_TIMELINE_VIEWPORT, GVID_TIMELINE_VIEWPORT_TAP,
-  GVID_TOOLS, type SequenceTrack, type TimelineDropPreview,
+  GVID_TOOLS, type SequenceTrack, type TimelineDropPreview, type TimelineViewport,
 } from '@gvidjs/contracts';
 import { clipBoundaryFrame, frameFromTimelineX, orderedTimelineTracks, projectDropPreview,
   snapTimelineFrame, timelineWheelMovement, TimelineTabTap } from './timeline';
@@ -32,6 +33,22 @@ function timecode(frame: number | null, numerator: number, denominator: number):
   const seconds = Math.floor(frame / fps);
   return [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60,
     Math.floor(frame - seconds * fps)].map((part) => String(part).padStart(2, '0')).join(':');
+}
+
+function revealKeyframeLine(input: HTMLInputElement): void {
+  requestAnimationFrame(() => {
+    const app = input.closest('.gvid-app');
+    const line = input.closest('.gvid-timeline')?.querySelector('.gvid-timeline-keyframe-line');
+    if (!app || !line) return;
+    const appRect = app.getBoundingClientRect();
+    const lineRect = line.getBoundingClientRect();
+    if (lineRect.left < appRect.right - 16) return;
+    const desiredGap = Math.min(100, appRect.width / 4);
+    const revealDistance = lineRect.left - (appRect.right - desiredGap);
+    const keepToggleVisible = input.getBoundingClientRect().left - appRect.left - 12;
+    const distance = Math.min(revealDistance, keepToggleVisible);
+    if (distance > 0) app.scrollTo({ left: app.scrollLeft + distance, behavior: 'smooth' });
+  });
 }
 
 export function Timeline({ tabId }: { tabId: string }) {
@@ -66,6 +83,7 @@ export function Timeline({ tabId }: { tabId: string }) {
   const trimDraftTap = useGrip(GVID_TIMELINE_TRIM_DRAFT_TAP);
   const editResult = useGrip(GVID_EDIT_RESULT);
   const openWired = useGrip(DESKTOP_OPEN_WIRED);
+  const effectsFocusTap = useGrip(GVID_EFFECTS_FOCUS_TAP);
 
   const availableSequence = !!project?.projectId && project.status === 'ready' &&
     change?.state === 'live' && graph?.graphId === sequence?.graphId &&
@@ -81,6 +99,7 @@ export function Timeline({ tabId }: { tabId: string }) {
   const pixelsPerFrame = viewport?.pixelsPerFrame ?? 8;
   const startFrame = viewport?.startFrame ?? 0;
   const snapEnabled = viewport?.snapEnabled ?? true;
+  const showKeyframes = viewport?.showKeyframes ?? false;
   const snapAnchors = [currentFrame, marks?.inFrame, marks?.outFrame]
     .filter((frame): frame is number => frame !== null && frame !== undefined);
   const previewEnd = preview ? preview.frame + preview.sourceOut - preview.sourceIn : 0;
@@ -102,6 +121,13 @@ export function Timeline({ tabId }: { tabId: string }) {
     sequence?.tracks.find((track) => track.id === draft.trackId)
       ?.clips.find((clip) => clip.id === draft.clipId) : null;
   const activeDraft = draft && draftClip?.markers?.some((marker) => marker.id === draft.markerId) ? draft : null;
+  const keyframeTool = showKeyframes && viewport?.keyframeTool?.sessionId === project?.sessionId
+    ? viewport?.keyframeTool ?? null : null;
+  const keyframeTrack = sequence?.tracks.find((track) => track.id === keyframeTool?.trackId);
+  const keyframeClip = keyframeTrack?.clips.find((clip) => clip.id === keyframeTool?.clipId);
+  const activeKeyframe = keyframeClip?.keyframes?.find((keyframe) => keyframe.id === keyframeTool?.keyframeId);
+  const keyframeFrame = activeKeyframe && keyframeClip ?
+    keyframeClip.timelineIn + activeKeyframe.sourceFrame - keyframeClip.sourceIn : null;
   const target = accepted && activeTarget?.ownerTabId === tabId && activeTarget.projectId === project?.projectId &&
     activeTarget.graphId === graph?.graphId && activeTarget.sequenceId === sequenceId ? activeTarget : null;
   const rangeStart = marks && marks.validity !== 'unset' && marks.validity !== 'invalid' ? marks.inFrame ?? 0 : null;
@@ -193,9 +219,10 @@ export function Timeline({ tabId }: { tabId: string }) {
     targetControl.set({ projectId: project.projectId, graphId: graph.graphId, sequenceId,
       trackId: videoTrack.id, frame, ownerTabId: tabId });
   };
-  const changeZoom = (next: number) => viewportTap?.set({
-    startFrame, pixelsPerFrame: next, verticalScroll: viewport?.verticalScroll ?? 0, snapEnabled,
-  });
+  const updateViewport = (next: Partial<TimelineViewport>) => {
+    if (viewport && viewportTap) viewportTap.set({ ...viewport, ...next });
+  };
+  const changeZoom = (next: number) => updateViewport({ pixelsPerFrame: next });
   const addMarker = () => {
     const scope = editScope();
     if (scope && canMark && selection?.trackId && selection.clipId && currentFrame !== null) {
@@ -284,8 +311,7 @@ export function Timeline({ tabId }: { tabId: string }) {
           }
           if (key === 's' && panelShortcutTarget && viewportTap) {
             event.preventDefault();
-            if (!event.repeat) viewportTap.set({ startFrame, pixelsPerFrame,
-              verticalScroll: viewport?.verticalScroll ?? 0, snapEnabled: !snapEnabled });
+            if (!event.repeat) updateViewport({ snapEnabled: !snapEnabled });
           }
           if (key === 'm' && panelShortcutTarget && canMark && edit) {
             event.preventDefault();
@@ -362,6 +388,11 @@ export function Timeline({ tabId }: { tabId: string }) {
           <div className="gvid-timeline-control-title">Edit</div>
           <div className="gvid-timeline-group">
             <button type="button" disabled={!canMark || !edit} onClick={addMarker}>+ Marker</button>
+            <button type="button" disabled={!accepted || !selection?.clipId || !openWired || !effectsFocusTap}
+              onClick={() => {
+                effectsFocusTap?.set({ clipId: selection!.clipId, keyframeId: null });
+                openWired?.(tabId, { toolId: GVID_TOOLS.effects });
+              }}>Effects</button>
             <button type="button" title={history?.undoLabel ?? 'Undo'} disabled={!accepted || !historyControl || !history?.canUndo || history.revision !== graph?.revision}
               onClick={() => void historyControl?.undo()}>Undo</button>
             <button type="button" title={history?.redoLabel ?? 'Redo'} disabled={!accepted || !historyControl || !history?.canRedo || history.revision !== graph?.revision}
@@ -388,13 +419,17 @@ export function Timeline({ tabId }: { tabId: string }) {
             <button type="button" title="Zoom in" disabled={!viewportTap || pixelsPerFrame >= 32} onClick={() => changeZoom(pixelsPerFrame * 2)}>+</button>
           </div>
           <label className="gvid-timeline-snap"><input type="checkbox" checked={snapEnabled}
-            disabled={!viewportTap} onChange={(event) => viewportTap?.set({ startFrame, pixelsPerFrame,
-              verticalScroll: viewport?.verticalScroll ?? 0, snapEnabled: event.currentTarget.checked })} />Snap</label>
+            disabled={!viewportTap} onChange={(event) => updateViewport({ snapEnabled: event.currentTarget.checked })} />Snap</label>
+          <label className="gvid-timeline-snap"><input type="checkbox" checked={showKeyframes}
+            disabled={!viewportTap} onChange={(event) => {
+              const input = event.currentTarget;
+              updateViewport({ showKeyframes: input.checked,
+                keyframeTool: input.checked ? viewport?.keyframeTool ?? null : null });
+              if (input.checked) revealKeyframeLine(input);
+            }} />Keyframes</label>
           <input type="range" min="0" max={Math.max(0, duration - 1)} step="1" value={startFrame}
-            aria-label="Timeline scroll" disabled={!viewportTap || duration <= 1} onChange={(event) => viewportTap?.set({
-              startFrame: Number(event.target.value), pixelsPerFrame,
-              verticalScroll: viewport?.verticalScroll ?? 0, snapEnabled,
-            })} />
+            aria-label="Timeline scroll" disabled={!viewportTap || duration <= 1}
+            onChange={(event) => updateViewport({ startFrame: Number(event.target.value) })} />
         </div>
         <div className="gvid-timeline-feedback" role="status">
           {editResult ? editResult.message : transport?.disabledReason ?? ''}
@@ -402,6 +437,15 @@ export function Timeline({ tabId }: { tabId: string }) {
       </aside>
 
       <div className="gvid-timeline-workspace">
+        {keyframeTool && activeKeyframe && keyframeFrame !== null && <div className="gvid-timeline-keyframe-tool"
+          role="dialog" aria-label="Keyframe manipulator">
+          <div className="gvid-timeline-keyframe-tool-head">
+            <strong>Keyframe manipulator</strong>
+            <button type="button" title="Close keyframe manipulator" aria-label="Close keyframe manipulator"
+              onClick={() => updateViewport({ keyframeTool: null })}>×</button>
+          </div>
+          <span>{keyframeTrack?.label} · frame {keyframeFrame}</span>
+        </div>}
         {activeDraft && <form className="gvid-timeline-marker-editor" role="dialog" aria-label="Edit clip marker"
           onSubmit={(event) => {
             event.preventDefault();
@@ -500,7 +544,7 @@ export function Timeline({ tabId }: { tabId: string }) {
               title="Drag playhead" />}
           </div>
         </div>
-        <div className="gvid-timeline-tracks" style={{ gridTemplateRows: `repeat(${Math.max(1, tracks.length)}, minmax(28px, 1fr))` }}
+        <div className="gvid-timeline-tracks" style={{ gridTemplateRows: `repeat(${Math.max(1, tracks.length)}, minmax(${showKeyframes ? 44 : 28}px, 1fr))` }}
           onDragOver={(event) => {
             if (!(event.target instanceof Element) || !event.target.closest('.gvid-timeline-lane')) clearDropPreview();
           }}
@@ -706,6 +750,62 @@ export function Timeline({ tabId }: { tabId: string }) {
                             clipId: clip.id, markerId: marker.id, label: marker.label, color: marker.color });
                         }} />;
                     })}
+                    {showKeyframes && <>
+                      <button type="button" className="gvid-timeline-keyframe-line"
+                        title={`Add keyframe to ${asset?.displayName ?? clip.assetId}`}
+                        aria-label={`Add keyframe to ${asset?.displayName ?? clip.assetId} on ${track.label}`}
+                        disabled={!accepted || editLocked || !edit}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          const scope = editScope();
+                          const rect = event.currentTarget.parentElement?.getBoundingClientRect();
+                          if (!scope || !rect || !edit) return;
+                          const frame = Math.min(clip.timelineOut - 1, frameFromTimelineX(event.clientX,
+                            rect.left, clip.timelineIn, rect.width / (clip.timelineOut - clip.timelineIn)));
+                          selectionTap?.set({ trackId: track.id, clipId: clip.id });
+                          transportControl?.seek(frame);
+                          void edit.addClipKeyframe({ ...scope, trackId: track.id, clipId: clip.id, frame });
+                        }} />
+                      {(clip.keyframes ?? []).filter((keyframe) =>
+                        keyframe.sourceFrame >= clip.sourceIn && keyframe.sourceFrame < clip.sourceOut).map((keyframe) => {
+                        const frame = clip.timelineIn + keyframe.sourceFrame - clip.sourceIn;
+                        const deleteKeyframe = () => {
+                          const scope = editScope();
+                          if (!scope || !edit || editLocked) return;
+                          void edit.deleteClipKeyframe({ ...scope, trackId: track.id,
+                            clipId: clip.id, keyframeId: keyframe.id });
+                        };
+                        return <button key={keyframe.id} type="button" className="gvid-timeline-keyframe-point"
+                          style={{ left: (keyframe.sourceFrame - clip.sourceIn + 0.5) * pixelsPerFrame }}
+                          title={`Keyframe at frame ${frame} - double-click to open manipulator; right-click to delete`}
+                          aria-label={`Keyframe at timeline frame ${frame} on ${track.label}`}
+                          aria-keyshortcuts="Delete"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            selectionTap?.set({ trackId: track.id, clipId: clip.id });
+                            transportControl?.seek(frame);
+                          }}
+                          onContextMenu={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            deleteKeyframe();
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key !== 'Delete') return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            deleteKeyframe();
+                          }}
+                          onDoubleClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            if (!accepted || !effectsFocusTap || !openWired) return;
+                            selectionTap?.set({ trackId: track.id, clipId: clip.id });
+                            effectsFocusTap.set({ clipId: clip.id, keyframeId: keyframe.id });
+                            openWired(tabId, { toolId: GVID_TOOLS.effects });
+                          }} />;
+                      })}
+                    </>}
                     {trimHandle('out')}
                   </div>;
                 })}
@@ -752,6 +852,8 @@ addEntry(GVID_TIMELINE_PLUGIN, {
       tabTaps: (tabId, params) => [
         new TimelineTabTap(tabId, typeof params?.sequenceId === 'string' ? params.sequenceId : null),
         createAtomValueTap(GVID_TIMELINE_MARKER_DRAFT, { initial: null, handleGrip: GVID_TIMELINE_MARKER_DRAFT_TAP }),
+        createAtomValueTap(GVID_EFFECTS_FOCUS, { initial: { clipId: null, keyframeId: null },
+          handleGrip: GVID_EFFECTS_FOCUS_TAP }),
       ],
       windowComponent: Timeline,
     },

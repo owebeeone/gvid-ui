@@ -182,7 +182,7 @@ export class TimelineTabTap extends BaseTap {
   private outFrame: number | null = null;
   private selection: TimelineSelection = { trackId: null, clipId: null };
   private viewport: TimelineViewport = { startFrame: 0, pixelsPerFrame: DEFAULT_ZOOM,
-    verticalScroll: 0, snapEnabled: true };
+    verticalScroll: 0, snapEnabled: true, showKeyframes: false, keyframeTool: null };
   private timer: ReturnType<typeof setInterval> | null = null;
 
   readonly sequenceHandle: AtomTapHandle<string | null> = {
@@ -270,7 +270,7 @@ export class TimelineTabTap extends BaseTap {
       this.inFrame = null;
       this.outFrame = null;
       this.selection = { trackId: null, clipId: null };
-      this.viewport = { ...this.viewport, startFrame: 0, verticalScroll: 0 };
+      this.viewport = { ...this.viewport, startFrame: 0, verticalScroll: 0, keyframeTool: null };
       this.frame = null;
       this.sequenceId = nextOwner?.sequenceId ?? null;
     }
@@ -293,6 +293,12 @@ export class TimelineTabTap extends BaseTap {
     else if (this.selection.clipId && !track.clips.some((clip) => clip.id === this.selection.clipId)) {
       this.selection = { trackId: track.id, clipId: null };
     }
+    const tool = this.viewport.keyframeTool;
+    if (tool && (tool.sessionId !== this.owner?.sessionId ||
+      !this.sequence?.tracks.find((row) => row.id === tool.trackId)?.clips
+        .find((clip) => clip.id === tool.clipId)?.keyframes?.some((keyframe) => keyframe.id === tool.keyframeId))) {
+      this.viewport = { ...this.viewport, keyframeTool: null };
+    }
     this.viewport = { ...this.viewport, startFrame: Math.min(this.viewport.startFrame, Math.max(0, duration - 1)) };
   }
 
@@ -306,6 +312,7 @@ export class TimelineTabTap extends BaseTap {
     this.inFrame = null;
     this.outFrame = null;
     this.selection = { trackId: null, clipId: null };
+    this.viewport = { ...this.viewport, keyframeTool: null };
     this.produce();
   }
 
@@ -321,6 +328,13 @@ export class TimelineTabTap extends BaseTap {
 
   private setViewport(value: TimelineViewport): void {
     const duration = this.sequence?.durationFrames ?? 0;
+    const showKeyframes = typeof value.showKeyframes === 'boolean'
+      ? value.showKeyframes : this.viewport.showKeyframes;
+    const tool = value.keyframeTool;
+    const validTool = tool && tool.sessionId === this.owner?.sessionId &&
+      !!this.sequence?.tracks.find((track) => track.id === tool.trackId)?.clips
+        .find((clip) => clip.id === tool.clipId)?.keyframes
+        ?.some((keyframe) => keyframe.id === tool.keyframeId);
     this.viewport = {
       startFrame: Number.isFinite(value.startFrame)
         ? Math.max(0, Math.min(Math.floor(value.startFrame), Math.max(0, duration - 1))) : this.viewport.startFrame,
@@ -328,6 +342,9 @@ export class TimelineTabTap extends BaseTap {
         ? Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, value.pixelsPerFrame)) : this.viewport.pixelsPerFrame,
       verticalScroll: Number.isFinite(value.verticalScroll) ? Math.max(0, value.verticalScroll) : this.viewport.verticalScroll,
       snapEnabled: typeof value.snapEnabled === 'boolean' ? value.snapEnabled : this.viewport.snapEnabled,
+      showKeyframes,
+      keyframeTool: !showKeyframes ? null : tool === undefined ? this.viewport.keyframeTool :
+        validTool ? tool : null,
     };
     this.produce();
   }

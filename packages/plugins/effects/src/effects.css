@@ -1,0 +1,95 @@
+.gvid-effects {
+  --fx-line: #cbd6d8;
+  --fx-muted: #607178;
+  --fx-accent: #167d82;
+  background: #fff;
+  color: #233238;
+  display: flex;
+  flex-direction: column;
+  font: 12px/1.35 system-ui, sans-serif;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+.gvid-effects * { box-sizing: border-box; }
+.gvid-effects button, .gvid-effects input, .gvid-effects select { font: inherit; }
+.gvid-effects button { cursor: pointer; }
+.gvid-effects button:disabled { cursor: default; opacity: .45; }
+.gvid-effects-head, .gvid-effects-identity, .gvid-effects-keyframes,
+.gvid-effects-frame, .gvid-effects-status { flex: 0 0 auto; }
+.gvid-effects-head {
+  align-items: center;
+  background: #f1f5f5;
+  border-bottom: 1px solid var(--fx-line);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 6px 10px;
+}
+.gvid-effects-head div { display: flex; flex-direction: column; min-width: 0; }
+.gvid-effects-head strong { font-size: 14px; }
+.gvid-effects-head span { color: var(--fx-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gvid-effects button {
+  background: #fff;
+  border: 1px solid #b6c6ca;
+  border-radius: 3px;
+  color: inherit;
+  min-height: 26px;
+  padding: 3px 8px;
+}
+.gvid-effects button:hover:not(:disabled) { background: #e8f2f1; }
+.gvid-effects button.active { background: #d8eeee; border-color: var(--fx-accent); color: #07545a; }
+.gvid-effects-identity, .gvid-effects-frame, .gvid-effects-status {
+  color: var(--fx-muted);
+  font-size: 11px;
+  padding: 5px 10px;
+}
+.gvid-effects-identity { display: flex; justify-content: space-between; }
+.gvid-effects-keyframes {
+  align-items: center;
+  border-bottom: 1px solid var(--fx-line);
+  border-top: 1px solid var(--fx-line);
+  display: flex;
+  gap: 4px;
+  min-height: 42px;
+  overflow-x: auto;
+  padding: 5px 8px;
+}
+.gvid-effects-keyframes button { flex: 0 0 auto; }
+.gvid-effects-spacer { flex: 1 0 4px; }
+.gvid-effects-frame { border-bottom: 1px solid var(--fx-line); }
+.gvid-effects-frame span { color: #385e66; }
+.gvid-effects-empty { color: var(--fx-muted); padding: 24px 10px; }
+.gvid-effects-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.gvid-effects-section { border-bottom: 1px solid var(--fx-line); padding: 9px 10px 12px; }
+.gvid-effects-section h3 { font-size: 12px; margin: 0 0 8px; }
+.gvid-effects-section-head { align-items: center; display: flex; flex-wrap: wrap; gap: 6px; justify-content: space-between; }
+.gvid-effects-section-head span { color: var(--fx-muted); font-size: 11px; }
+.gvid-effects-section-head h3 { margin-bottom: 6px; }
+.gvid-effects-section-head > button { min-height: 23px; padding: 2px 6px; }
+.gvid-effects-link { align-items: center; color: var(--fx-muted); display: flex; gap: 5px; font-size: 11px; margin: 3px 0; }
+.gvid-effects-segments { display: flex; margin-bottom: 7px; }
+.gvid-effects-segments button:first-child { border-radius: 3px 0 0 3px; }
+.gvid-effects-segments button:last-child { border-left: 0; border-radius: 0 3px 3px 0; }
+.gvid-effect-control { align-items: center; display: grid; gap: 7px; grid-template-columns: minmax(64px, .7fr) minmax(54px, 1.2fr) 79px; min-height: 29px; }
+.gvid-effect-control > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gvid-effect-control input[type='range'] { accent-color: var(--fx-accent); margin: 0; min-width: 0; width: 100%; }
+.gvid-effect-value { align-items: center; display: flex; gap: 2px; min-width: 0; }
+.gvid-effect-value input { background: #fff; border: 1px solid #b6c6ca; border-radius: 2px; color: inherit; min-width: 0; padding: 3px; text-align: right; width: 100%; }
+.gvid-effect-value small { color: var(--fx-muted); font-size: 10px; min-width: 13px; }
+.gvid-effects-note, .gvid-effects-section > small { color: var(--fx-muted); display: block; font-size: 10px; margin-top: 6px; }
+.gvid-effects-profile-row { display: flex; gap: 5px; margin-top: 6px; min-width: 0; }
+.gvid-effects-profile-row input, .gvid-effects-profile-row select {
+  background: #fff;
+  border: 1px solid #b6c6ca;
+  border-radius: 2px;
+  color: inherit;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 5px;
+}
+.gvid-effects-profile-row button { flex: 0 0 58px; }
+.gvid-effects-profile-summary { color: var(--fx-muted); display: flex; flex-direction: column; font-size: 10px; gap: 2px; margin-top: 8px; }
+.gvid-effects-profile-summary strong { color: #30494f; font-size: 11px; }
+.gvid-effects-status { border-top: 1px solid var(--fx-line); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

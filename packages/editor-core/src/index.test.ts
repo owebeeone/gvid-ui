@@ -4,8 +4,9 @@ import { createAtomValueTap, Grok, type Grip } from '@owebeeone/grip-react';
 import {
   GVID_ACTIVE_INSERT_TARGET, GVID_ACTIVE_INSERT_TARGET_CONTROL, GVID_ASSET_CATALOG,
   GVID_BINDING_VIEW, GVID_CHANGE_STATUS, GVID_DEST_PROJECT_ID, GVID_EDIT_COMMAND,
-  GVID_EDIT_RESULT, GVID_GRAPH_VIEW, GVID_HISTORY_CONTROL, GVID_HISTORY_VIEW,
-  GVID_PROJECT_CONTROL, GVID_PROJECT_VIEW, GVID_SEQUENCE_VIEW,
+  GVID_EDIT_RESULT, GVID_EFFECT_PROFILES, GVID_GRAPH_VIEW, GVID_HISTORY_CONTROL, GVID_HISTORY_VIEW,
+  GVID_PROJECT_CONTROL, GVID_PROJECT_VIEW, GVID_SEQUENCE_VIEW, GVID_SOURCE_MARKER_CATALOG,
+  NEUTRAL_EFFECTS, evaluateClipEffects,
   type InsertSourceSpan, type InsertTarget, type PlaceSourceSpan, type TimelineEditScope,
 } from '@gvidjs/contracts';
 import { registerMockTaps, rippleDeleteSpan } from './index';
@@ -44,10 +45,17 @@ function setup(withLinks = true) {
     return { projectId: project.projectId!, sessionId: project.sessionId,
       expectedRevision: project.revision, sequenceId: get(GVID_SEQUENCE_VIEW).id };
   };
+  const sourceScope = (assetId = 'workshop') => {
+    const project = get(GVID_PROJECT_VIEW);
+    const asset = get(GVID_ASSET_CATALOG).find((item) => item.id === assetId)!;
+    return { projectId: project.projectId!, sessionId: project.sessionId,
+      expectedRevision: project.revision, assetId, assetVersion: asset.version,
+      fingerprint: asset.fingerprint };
+  };
   const placeIntent = (selection: InsertTarget, overrides: Partial<PlaceSourceSpan> = {}): PlaceSourceSpan => ({
     ...intent(selection), ...scope(), ...overrides,
   });
-  return { grok, get, target, intent, scope, placeIntent, links };
+  return { grok, get, target, intent, scope, sourceScope, placeIntent, links };
 }
 
 function ranges(clips: readonly { assetId: string; sourceIn: number; sourceOut: number; timelineIn: number; timelineOut: number }[]) {
@@ -72,12 +80,206 @@ function expectLinkedPair(get: <T>(grip: Grip<T>) => T, number: number): void {
       sourceIn: clip.sourceIn, sourceOut: clip.sourceOut,
       timelineIn: clip.timelineIn, timelineOut: clip.timelineOut });
     expect(partner?.markers).toEqual(clip.markers);
+    expect(partner?.keyframes).toEqual(clip.keyframes);
   }
   expect(audio.clips).toHaveLength(video.clips.filter((clip) =>
     get(GVID_ASSET_CATALOG).find((asset) => asset.id === clip.assetId)?.hasAudio).length);
 }
 
 describe('mock editor root Grips', () => {
+  it('adds clip keyframes through either linked track and restores them through history', async () => {
+    const { get, scope } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const video = () => ({ ...scope(), trackId: 'v1', clipId: 'clip-a' });
+    expect((await edit.addClipKeyframe({ ...video(), frame: 48 })).status).toBe('rejected');
+    expect((await edit.addClipKeyframe({ ...video(), frame: 10 })).status).toBe('accepted-session-only');
+    const keyframe = get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].keyframes?.[0];
+    expect(keyframe).toMatchObject({ sourceFrame: 22 });
+    expect((await edit.addClipKeyframe({ ...video(), frame: 10 })).status).toBe('rejected');
+    expect((await edit.addClipKeyframe({ ...scope(), trackId: 'a1', clipId: 'audio-clip-a', frame: 30 })).status)
+      .toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].keyframes?.map((item) => item.sourceFrame)).toEqual([22, 42]);
+    expectLinkedPair(get, 1);
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].keyframes).toHaveLength(1);
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].keyframes).toBeUndefined();
+    await get(GVID_HISTORY_CONTROL).redo();
+    await get(GVID_HISTORY_CONTROL).redo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].keyframes).toHaveLength(2);
+  });
+
+  it('deletes one linked keyframe by id and restores it through history', async () => {
+    const { get, scope } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const video = () => ({ ...scope(), trackId: 'v1', clipId: 'clip-a' });
+    const stale = video();
+    await edit.addClipKeyframe({ ...video(), frame: 10 });
+    await edit.addClipKeyframe({ ...video(), frame: 30 });
+    const keyframes = get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].keyframes!;
+    const audio = () => ({ ...scope(), trackId: 'a1', clipId: 'audio-clip-a' });
+    expect((await edit.deleteClipKeyframe({ ...stale, keyframeId: keyframes[0].id })).status).toBe('rejected');
+    expect((await edit.deleteClipKeyframe({ ...audio(), keyframeId: 'missing' })).status).toBe('rejected');
+    expect((await edit.deleteClipKeyframe({ ...audio(), keyframeId: keyframes[0].id })).status)
+      .toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].keyframes?.map((item) => item.sourceFrame)).toEqual([42]);
+    expectLinkedPair(get, 1);
+    expect(get(GVID_HISTORY_VIEW).undoLabel).toBe('Delete clip keyframe');
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].keyframes?.map((item) => item.sourceFrame)).toEqual([22, 42]);
+    await get(GVID_HISTORY_CONTROL).redo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].keyframes?.map((item) => item.sourceFrame)).toEqual([42]);
+    expect((await edit.deleteClipKeyframe({ ...video(), keyframeId: keyframes[1].id })).status)
+      .toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].keyframes).toEqual([]);
+    expectLinkedPair(get, 1);
+  });
+
+  it('edits base and keyed effects, saves a profile, and applies it as one undoable edit', async () => {
+    const { get, scope } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const source = () => ({ ...scope(), trackId: 'v1', clipId: 'clip-a' });
+    const base = { ...NEUTRAL_EFFECTS, alpha: 0.5, gradeR: 0.7 };
+    expect((await edit.setClipEffects({ ...source(), keyframeId: null, effects: base })).status)
+      .toBe('accepted-session-only');
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].effects).toEqual(base);
+    await edit.addClipKeyframe({ ...source(), frame: 10 });
+    const first = get(GVID_SEQUENCE_VIEW).tracks[0].clips[0].keyframes![0];
+    expect(first.effects).toEqual(base);
+    const keyed = { ...base, alpha: 0.25, moveX: 40, rotateDeg: 15 };
+    expect((await edit.setClipEffects({ ...scope(), trackId: 'a1', clipId: 'audio-clip-a',
+      keyframeId: first.id, effects: keyed })).status).toBe('accepted-session-only');
+    expect(evaluateClipEffects(get(GVID_SEQUENCE_VIEW).tracks[0].clips[0], 10)).toEqual(keyed);
+    expectLinkedPair(get, 1);
+    expect((await edit.setClipEffects({ ...source(), keyframeId: first.id,
+      effects: { ...keyed, alpha: 2 } })).status).toBe('rejected');
+    expect((await edit.saveEffectsProfile({ ...source(), name: '  Opening look  ' })).status)
+      .toBe('accepted-session-only');
+    const profile = get(GVID_EFFECT_PROFILES)[0];
+    expect(profile).toMatchObject({ name: 'Opening look', version: 1,
+      keyframes: [{ offset: 10, effects: keyed }] });
+    expect((await edit.applyEffectsProfile({ ...scope(), trackId: 'v1', clipId: 'clip-b',
+      profileId: profile.id, profileVersion: 0 })).status).toBe('rejected');
+    expect((await edit.applyEffectsProfile({ ...scope(), trackId: 'v1', clipId: 'clip-b',
+      profileId: profile.id, profileVersion: 1 })).status).toBe('accepted-session-only');
+    const target = get(GVID_SEQUENCE_VIEW).tracks[0].clips[1];
+    expect(target.effects).toEqual(base);
+    expect(target.keyframes).toMatchObject([{ sourceFrame: 15, effects: keyed }]);
+    expect(target.keyframes![0].id).not.toBe(first.id);
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[1].keyframes).toBeUndefined();
+    await get(GVID_HISTORY_CONTROL).redo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips[1].keyframes).toHaveLength(1);
+    await get(GVID_HISTORY_CONTROL).undo();
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_EFFECT_PROFILES)).toEqual([]);
+  });
+
+  it('keeps keyframes attached to source frames through copy, move, trim, and split', async () => {
+    const { get, scope, target } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const selected = () => ({ ...scope(), trackId: 'v1', clipId: 'clip-a' });
+    await edit.addClipKeyframe({ ...selected(), frame: 10 });
+    await edit.addClipKeyframe({ ...selected(), frame: 30 });
+    await edit.copyClip(selected());
+    expect((await edit.pasteClip({ ...scope(), target: target(96) })).status).toBe('accepted-session-only');
+    const pasted = get(GVID_SEQUENCE_VIEW).tracks[0].clips.find((clip) => clip.timelineIn === 96)!;
+    expect(pasted.keyframes?.map((keyframe) => keyframe.sourceFrame)).toEqual([22, 42]);
+    await edit.addTrack(scope());
+    expect((await edit.moveClip({ ...scope(), sourceTrackId: 'v1', clipId: pasted.id,
+      target: { ...target(160), trackId: 'v2' } })).status).toBe('accepted-session-only');
+    const moved = get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v2')!.clips[0];
+    expect(moved.keyframes?.map((keyframe) => keyframe.sourceFrame)).toEqual([22, 42]);
+    await edit.trimClip({ ...scope(), trackId: 'v2', clipId: moved.id, edge: 'in', frame: 175 });
+    expect(get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v2')!.clips[0].keyframes)
+      .toHaveLength(2);
+    await edit.trimClip({ ...scope(), trackId: 'v2', clipId: moved.id, edge: 'in', frame: 160 });
+    expect((await edit.splitClip({ ...scope(), trackId: 'v2', frame: 184 })).status)
+      .toBe('accepted-session-only');
+    const halves = get(GVID_SEQUENCE_VIEW).tracks.find((track) => track.id === 'v2')!.clips;
+    expect(halves.map((clip) => clip.keyframes?.map((keyframe) => keyframe.sourceFrame)))
+      .toEqual([[22], [42]]);
+    expectLinkedPair(get, 2);
+  });
+
+  it('partitions keyframes when ripple edits divide a clip', async () => {
+    const { get, scope, target, intent } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    await edit.addClipKeyframe({ ...scope(), trackId: 'v1', clipId: 'clip-a', frame: 10 });
+    await edit.addClipKeyframe({ ...scope(), trackId: 'v1', clipId: 'clip-a', frame: 30 });
+    get(GVID_ACTIVE_INSERT_TARGET_CONTROL).set(target(24));
+    expect((await edit.insert(intent(target(24)))).status).toBe('accepted-session-only');
+    const clips = get(GVID_SEQUENCE_VIEW).tracks[0].clips;
+    expect(clips[0].keyframes?.map((keyframe) => keyframe.sourceFrame)).toEqual([22]);
+    expect(clips[2].keyframes?.map((keyframe) => keyframe.sourceFrame)).toEqual([42]);
+    expectLinkedPair(get, 1);
+    await get(GVID_HISTORY_CONTROL).undo();
+    const deleted = rippleDeleteSpan(get(GVID_SEQUENCE_VIEW), 16, 24, 'keyframe-delete')!;
+    expect(deleted.tracks[0].clips.filter((clip) => clip.assetId === 'lighthouse')
+      .map((clip) => clip.keyframes?.map((keyframe) => keyframe.sourceFrame))).toEqual([[22], [42]]);
+  });
+
+  it('shares source markers by asset and restores their edits through history', async () => {
+    const { get, sourceScope } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    const stale = sourceScope();
+    expect((await edit.addSourceMarker({ ...stale, frame: 12 })).status).toBe('accepted-session-only');
+    const marker = get(GVID_SOURCE_MARKER_CATALOG)[0].markers[0];
+    expect(marker).toMatchObject({ sourceFrame: 12, label: '', color: 'red' });
+    expect((await edit.addSourceMarker({ ...stale, frame: 13 })).status).toBe('rejected');
+    expect((await edit.addSourceMarker({ ...sourceScope(), frame: 12 })).status).toBe('rejected');
+    expect((await edit.addSourceMarker({ ...sourceScope(), fingerprint: 'old', frame: 13 })).status).toBe('rejected');
+    expect((await edit.updateSourceMarker({ ...sourceScope(), markerId: marker.id,
+      label: '  Slate  ', color: 'green' })).status).toBe('accepted-session-only');
+    expect(get(GVID_SOURCE_MARKER_CATALOG)[0].markers[0]).toMatchObject({ label: 'Slate', color: 'green' });
+    expect((await edit.updateSourceMarker({ ...sourceScope(), markerId: marker.id,
+      label: 'Slate', color: 'purple' as 'red' })).status).toBe('rejected');
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SOURCE_MARKER_CATALOG)[0].markers[0]).toMatchObject({ label: '', color: 'red' });
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SOURCE_MARKER_CATALOG)).toEqual([]);
+    await get(GVID_HISTORY_CONTROL).redo();
+    await get(GVID_HISTORY_CONTROL).redo();
+    expect(get(GVID_SOURCE_MARKER_CATALOG)[0].markers[0]).toMatchObject({ label: 'Slate', color: 'green' });
+    await edit.addSourceMarker({ ...sourceScope('lighthouse'), frame: 12 });
+    expect(get(GVID_SOURCE_MARKER_CATALOG).map((set) => set.assetId)).toEqual(['workshop', 'lighthouse']);
+    get(GVID_PROJECT_CONTROL).open('mock-b', { discardSessionEdits: true });
+    expect(get(GVID_SOURCE_MARKER_CATALOG)).toEqual([]);
+    expect((await edit.addSourceMarker({ ...stale, frame: 12 })).status).toBe('rejected');
+  });
+
+  it('carries source markers inside the selected span through drop and insert', async () => {
+    const { get, sourceScope, target, placeIntent, intent } = setup();
+    const edit = get(GVID_EDIT_COMMAND);
+    for (const frame of [11, 12, 20, 24]) {
+      expect((await edit.addSourceMarker({ ...sourceScope(), frame })).status).toBe('accepted-session-only');
+    }
+    const labeledMarker = get(GVID_SOURCE_MARKER_CATALOG)[0].markers.find((marker) => marker.sourceFrame === 12)!;
+    expect((await edit.updateSourceMarker({ ...sourceScope(), markerId: labeledMarker.id,
+      label: 'Slate', color: 'blue' })).status).toBe('accepted-session-only');
+    expect((await edit.place(placeIntent(target(96), { sourceIn: 12, sourceOut: 24 }))).status)
+      .toBe('accepted-session-only');
+    const placed = get(GVID_SEQUENCE_VIEW).tracks[0].clips.find((clip) => clip.timelineIn === 96)!;
+    expect(placed.markers?.map((marker) => marker.sourceFrame)).toEqual([12, 20]);
+    expect(placed.markers?.[0]).toMatchObject({ id: labeledMarker.id, label: 'Slate', color: 'blue' });
+    expectLinkedPair(get, 1);
+
+    get(GVID_ACTIVE_INSERT_TARGET_CONTROL).set(target(24));
+    expect((await edit.insert(intent(target(24), { sourceIn: 20, sourceOut: 24 }))).status)
+      .toBe('accepted-session-only');
+    const inserted = get(GVID_SEQUENCE_VIEW).tracks[0].clips.find((clip) => clip.id.startsWith('insert-'))!;
+    expect(inserted.markers?.map((marker) => marker.sourceFrame)).toEqual([20]);
+    expect(get(GVID_SOURCE_MARKER_CATALOG)[0].markers.map((marker) => marker.sourceFrame))
+      .toEqual([11, 12, 20, 24]);
+    expectLinkedPair(get, 1);
+    await get(GVID_HISTORY_CONTROL).undo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips.some((clip) => clip.id === inserted.id)).toBe(false);
+    expect(get(GVID_SOURCE_MARKER_CATALOG)[0].markers).toHaveLength(4);
+    await get(GVID_HISTORY_CONTROL).redo();
+    expect(get(GVID_SEQUENCE_VIEW).tracks[0].clips.find((clip) => clip.id === inserted.id)?.markers)
+      .toHaveLength(1);
+  });
+
   it('adds, edits, and undoes clip markers on the selected source frame', async () => {
     const { get, scope } = setup();
     const edit = get(GVID_EDIT_COMMAND);

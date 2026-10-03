@@ -77,6 +77,25 @@
 .gvid-timeline-marker-actions { display: flex; gap: 5px; justify-content: flex-end; }
 .gvid-timeline-marker-actions button { background: #fff; border: 1px solid #aebfc3; border-radius: 2px; padding: 4px 8px; }
 .gvid-timeline-marker-actions button[type='submit'] { background: #167d82; border-color: #167d82; color: #fff; }
+.gvid-timeline-keyframe-tool {
+  background: #fff;
+  border: 1px solid #aebfc3;
+  border-radius: 3px;
+  box-shadow: 0 4px 18px #172e3040;
+  color: #233238;
+  display: grid;
+  gap: 6px;
+  left: 8px;
+  padding: 8px 10px;
+  position: absolute;
+  top: 8px;
+  width: min(230px, calc(100% - 16px));
+  z-index: 12;
+}
+.gvid-timeline-keyframe-tool-head { align-items: center; display: flex; justify-content: space-between; gap: 8px; }
+.gvid-timeline-keyframe-tool-head strong { font-size: 13px; }
+.gvid-timeline-keyframe-tool-head button { background: transparent; border: 0; color: #40545a; cursor: pointer; font-size: 18px; }
+.gvid-timeline-keyframe-tool > span { color: #627176; font-size: 11px; }
 
 .gvid-timeline-stage {
   display: grid;
@@ -193,6 +212,43 @@
 .gvid-timeline-clip-marker.green, .gvid-timeline-marker-swatch.green { background: #2f9360; }
 .gvid-timeline-clip-marker.blue, .gvid-timeline-marker-swatch.blue { background: #2777bc; }
 .gvid-timeline-clip-marker.yellow, .gvid-timeline-marker-swatch.yellow { background: #ecc34a; }
+.gvid-timeline-keyframe-line {
+  background: transparent;
+  border: 0;
+  bottom: 3px;
+  cursor: crosshair;
+  height: 15px;
+  left: 7px;
+  padding: 0;
+  position: absolute;
+  right: 7px;
+  z-index: 1;
+}
+.gvid-timeline-keyframe-line::before {
+  background: #238076;
+  content: '';
+  height: 2px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 6px;
+}
+.gvid-timeline-keyframe-line:hover:not(:disabled)::before { background: #0d5b54; height: 3px; }
+.gvid-timeline-keyframe-line:disabled { cursor: default; }
+.gvid-timeline-keyframe-point {
+  background: #fff;
+  border: 2px solid #167b71;
+  border-radius: 1px;
+  bottom: 5px;
+  cursor: pointer;
+  height: 11px;
+  padding: 0;
+  position: absolute;
+  transform: translateX(-50%) rotate(45deg);
+  width: 11px;
+  z-index: 3;
+}
+.gvid-timeline-keyframe-point:hover, .gvid-timeline-keyframe-point:focus-visible { background: #6bc5b5; }
 .gvid-timeline-trim {
   background: #407f81;
   border: 0;

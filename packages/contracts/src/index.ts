@@ -1,18 +1,22 @@
 import type { GrythPlugin } from '@grythjs/plugin-api';
 import { defineGrip } from '@grythjs/plugin-api';
 import type { AtomTapHandle } from '@owebeeone/grip-react';
+export { NEUTRAL_EFFECTS, validEffects, sameEffects, evaluateClipEffects,
+  effectsAsCmyka, effectsFromCmyka, type Cmyka } from './effects';
 
 export const GVID_TOOLS = {
   assets: 'gvid.assets',
   source: 'gvid.source',
   sequence: 'gvid.sequence-preview',
   timeline: 'gvid.timeline',
+  effects: 'gvid.effects',
 } as const;
 
 export const GVID_ASSETS_PLUGIN = defineGrip<GrythPlugin>('Gvid.Plugin.Assets');
 export const GVID_SOURCE_PLUGIN = defineGrip<GrythPlugin>('Gvid.Plugin.Source');
 export const GVID_PREVIEW_PLUGIN = defineGrip<GrythPlugin>('Gvid.Plugin.SequencePreview');
 export const GVID_TIMELINE_PLUGIN = defineGrip<GrythPlugin>('Gvid.Plugin.Timeline');
+export const GVID_EFFECTS_PLUGIN = defineGrip<GrythPlugin>('Gvid.Plugin.Effects');
 
 export interface Rational {
   num: number;
@@ -70,6 +74,34 @@ export interface SequenceClip {
   timelineIn: number;
   timelineOut: number;
   markers?: readonly ClipMarker[];
+  keyframes?: readonly ClipKeyframe[];
+  effects?: ClipEffectsState;
+}
+
+export interface ClipKeyframe {
+  id: string;
+  sourceFrame: number;
+  effects?: ClipEffectsState;
+}
+
+export interface ClipEffectsState {
+  alpha: number;
+  gradeR: number;
+  gradeG: number;
+  gradeB: number;
+  moveX: number;
+  moveY: number;
+  scaleX: number;
+  scaleY: number;
+  rotateDeg: number;
+}
+
+export interface EffectsProfile {
+  id: string;
+  name: string;
+  version: number;
+  base: ClipEffectsState;
+  keyframes: readonly { offset: number; effects: ClipEffectsState }[];
 }
 
 export type ClipMarkerColor = 'red' | 'green' | 'blue' | 'yellow';
@@ -79,6 +111,13 @@ export interface ClipMarker {
   sourceFrame: number;
   label: string;
   color: ClipMarkerColor;
+}
+
+export interface SourceMarkerSet {
+  assetId: string;
+  assetVersion: string;
+  fingerprint: string;
+  markers: readonly ClipMarker[];
 }
 
 export interface SequenceTrack {
@@ -189,6 +228,47 @@ export interface UpdateClipMarker extends SelectedTimelineClip {
   color: ClipMarkerColor;
 }
 
+export interface AddClipKeyframe extends SelectedTimelineClip {
+  frame: number;
+}
+
+export interface DeleteClipKeyframe extends SelectedTimelineClip {
+  keyframeId: string;
+}
+
+export interface SetClipEffects extends SelectedTimelineClip {
+  keyframeId: string | null;
+  effects: ClipEffectsState;
+}
+
+export interface SaveEffectsProfile extends SelectedTimelineClip {
+  name: string;
+}
+
+export interface ApplyEffectsProfile extends SelectedTimelineClip {
+  profileId: string;
+  profileVersion: number;
+}
+
+export interface SourceMarkerScope {
+  projectId: string;
+  sessionId: string;
+  expectedRevision: number;
+  assetId: string;
+  assetVersion: string;
+  fingerprint: string;
+}
+
+export interface AddSourceMarker extends SourceMarkerScope {
+  frame: number;
+}
+
+export interface UpdateSourceMarker extends SourceMarkerScope {
+  markerId: string;
+  label: string;
+  color: ClipMarkerColor;
+}
+
 export interface DeleteTimelineClip extends SelectedTimelineClip {
   ripple: boolean;
 }
@@ -233,6 +313,13 @@ export interface EditorControl {
   trimClip(intent: TrimTimelineClip): Promise<EditorResult>;
   addClipMarker(intent: AddClipMarker): Promise<EditorResult>;
   updateClipMarker(intent: UpdateClipMarker): Promise<EditorResult>;
+  addClipKeyframe(intent: AddClipKeyframe): Promise<EditorResult>;
+  deleteClipKeyframe(intent: DeleteClipKeyframe): Promise<EditorResult>;
+  setClipEffects(intent: SetClipEffects): Promise<EditorResult>;
+  saveEffectsProfile(intent: SaveEffectsProfile): Promise<EditorResult>;
+  applyEffectsProfile(intent: ApplyEffectsProfile): Promise<EditorResult>;
+  addSourceMarker(intent: AddSourceMarker): Promise<EditorResult>;
+  updateSourceMarker(intent: UpdateSourceMarker): Promise<EditorResult>;
 }
 
 export interface SourceDragSpan {
@@ -367,6 +454,13 @@ export interface TimelineViewport {
   pixelsPerFrame: number;
   verticalScroll: number;
   snapEnabled: boolean;
+  showKeyframes: boolean;
+  keyframeTool: {
+    sessionId: string;
+    trackId: string;
+    clipId: string;
+    keyframeId: string;
+  } | null;
 }
 
 export interface Diagnostic {
@@ -482,6 +576,7 @@ export const GVID_SOURCE_TRANSPORT = defineGrip<TransportView>('Gvid.Source.Tran
 export const GVID_SOURCE_TRANSPORT_CONTROL = defineGrip<TransportControl>('Gvid.Source.Transport.Control');
 export const GVID_SOURCE_MARKS = defineGrip<FrameMarks>('Gvid.Source.Marks');
 export const GVID_SOURCE_MARKS_CONTROL = defineGrip<MarksControl>('Gvid.Source.Marks.Control');
+export const GVID_SOURCE_MARKER_CATALOG = defineGrip<readonly SourceMarkerSet[]>('Gvid.Source.MarkerCatalog');
 
 export const GVID_DEST_TIMELINE_FRAME = defineGrip<number | null>('Gvid.Dest.TimelineFrame', null);
 export const GVID_TIMELINE_TRANSPORT = defineGrip<TransportView>('Gvid.Timeline.Transport');
@@ -494,6 +589,34 @@ export const GVID_TIMELINE_MARKER_DRAFT = defineGrip<TimelineMarkerDraft | null>
 export const GVID_TIMELINE_MARKER_DRAFT_TAP = defineGrip<AtomTapHandle<TimelineMarkerDraft | null>>('Gvid.Timeline.MarkerDraft.Tap');
 export const GVID_TIMELINE_VIEWPORT = defineGrip<TimelineViewport>('Gvid.Timeline.Viewport');
 export const GVID_TIMELINE_VIEWPORT_TAP = defineGrip<AtomTapHandle<TimelineViewport>>('Gvid.Timeline.Viewport.Tap');
+
+export interface EffectsFocus { clipId: string | null; keyframeId: string | null; }
+export interface EffectsPin {
+  projectId: string;
+  sessionId: string;
+  sequenceId: string;
+  clipId: string;
+  keyframeId: string | null;
+}
+export interface EffectsDraft extends EffectsPin {
+  revision: number;
+  effects: ClipEffectsState;
+}
+export const GVID_EFFECTS_FOCUS = defineGrip<EffectsFocus>('Gvid.Effects.Focus');
+export const GVID_EFFECTS_FOCUS_TAP = defineGrip<AtomTapHandle<EffectsFocus>>('Gvid.Effects.Focus.Tap');
+export const GVID_EFFECTS_PIN = defineGrip<EffectsPin | null>('Gvid.Effects.Pin', null);
+export const GVID_EFFECTS_PIN_TAP = defineGrip<AtomTapHandle<EffectsPin | null>>('Gvid.Effects.Pin.Tap');
+export const GVID_EFFECTS_DRAFT = defineGrip<EffectsDraft | null>('Gvid.Effects.Draft', null);
+export const GVID_EFFECTS_DRAFT_TAP = defineGrip<AtomTapHandle<EffectsDraft | null>>('Gvid.Effects.Draft.Tap');
+export const GVID_EFFECTS_COLOUR_MODE = defineGrip<'rgba' | 'cmyka'>('Gvid.Effects.ColourMode');
+export const GVID_EFFECTS_COLOUR_MODE_TAP = defineGrip<AtomTapHandle<'rgba' | 'cmyka'>>('Gvid.Effects.ColourMode.Tap');
+export const GVID_EFFECTS_SCALE_LINK = defineGrip<boolean>('Gvid.Effects.ScaleLink');
+export const GVID_EFFECTS_SCALE_LINK_TAP = defineGrip<AtomTapHandle<boolean>>('Gvid.Effects.ScaleLink.Tap');
+export const GVID_EFFECTS_PROFILE_NAME = defineGrip<string>('Gvid.Effects.ProfileName');
+export const GVID_EFFECTS_PROFILE_NAME_TAP = defineGrip<AtomTapHandle<string>>('Gvid.Effects.ProfileName.Tap');
+export const GVID_EFFECTS_PROFILE_CHOICE = defineGrip<string>('Gvid.Effects.ProfileChoice');
+export const GVID_EFFECTS_PROFILE_CHOICE_TAP = defineGrip<AtomTapHandle<string>>('Gvid.Effects.ProfileChoice.Tap');
+export const GVID_EFFECT_PROFILES = defineGrip<readonly EffectsProfile[]>('Gvid.Effects.Profiles');
 
 export const GVID_ACTIVE_INSERT_TARGET = defineGrip<InsertTarget | null>('Gvid.Insert.Target', null);
 export const GVID_ACTIVE_INSERT_TARGET_CONTROL = defineGrip<InsertTargetControl>('Gvid.Insert.Target.Control');

@@ -15,6 +15,7 @@
     "@gvidjs/editor-core": "workspace:*",
     "@gvidjs/mock-media": "workspace:*",
     "@gvidjs/plugin-assets": "workspace:*",
+    "@gvidjs/plugin-effects": "workspace:*",
     "@gvidjs/plugin-source": "workspace:*",
     "@gvidjs/plugin-sequence": "workspace:*",
     "@gvidjs/plugin-timeline": "workspace:*",

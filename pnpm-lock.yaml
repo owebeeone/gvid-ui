@@ -42,6 +42,9 @@ importers:
       '@gvidjs/plugin-assets':
         specifier: workspace:*
         version: link:packages/plugins/assets
+      '@gvidjs/plugin-effects':
+        specifier: workspace:*
+        version: link:packages/plugins/effects
       '@gvidjs/plugin-sequence':
         specifier: workspace:*
         version: link:packages/plugins/sequence
@@ -291,6 +294,21 @@ importers:
         version: link:../contracts
 
   packages/plugins/assets:
+    dependencies:
+      '@grythjs/plugin-api':
+        specifier: workspace:*
+        version: link:../../../../../gryth-wz/gryth-ui/packages/plugin-api
+      '@gvidjs/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      '@owebeeone/grip-react':
+        specifier: workspace:*
+        version: link:../../../../../gryth-wz/grip-react
+      react:
+        specifier: '*'
+        version: 19.3.0
+
+  packages/plugins/effects:
     dependencies:
       '@grythjs/plugin-api':
         specifier: workspace:*

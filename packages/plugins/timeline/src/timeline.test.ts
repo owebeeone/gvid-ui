@@ -379,12 +379,32 @@ describe('timeline tab transport', () => {
     tap.transportControl.seek(3);
     tap.marksControl.setIn();
     tap.selectionHandle.set({ trackId: 'v1', clipId: 'a' });
-    tap.viewportHandle.set({ startFrame: 4, pixelsPerFrame: 16, verticalScroll: 0, snapEnabled: false });
+    tap.viewportHandle.set({ startFrame: 4, pixelsPerFrame: 16, verticalScroll: 0,
+      snapEnabled: false, showKeyframes: true, keyframeTool: null });
     expect(read(GVID_TIMELINE_MARKS)?.inFrame).toBe(3);
     expect(otherRead(GVID_TIMELINE_MARKS)?.validity).toBe('unset');
     expect(otherRead(GVID_TIMELINE_SELECTION)).toEqual({ trackId: null, clipId: null });
     expect(other.viewportHandle.get()).toEqual({ startFrame: 0, pixelsPerFrame: 8,
-      verticalScroll: 0, snapEnabled: true });
+      verticalScroll: 0, snapEnabled: true, showKeyframes: false, keyframeTool: null });
     expect(otherRead(GVID_DEST_TIMELINE_FRAME)).toBe(0);
+  });
+
+  it('validates keyframe manipulator focus and closes it when hidden', () => {
+    const withKeyframe: SequenceView = { ...sequence, tracks: [{ ...sequence.tracks[0], clips: [
+      { ...sequence.tracks[0].clips[0], keyframes: [{ id: 'keyframe-1', sourceFrame: 13 }] },
+      sequence.tracks[0].clips[1],
+    ] }] };
+    const { tap } = setup(withKeyframe);
+    const initial = tap.viewportHandle.get();
+    tap.viewportHandle.set({ ...initial, showKeyframes: true, keyframeTool: {
+      sessionId: 'stale', trackId: 'v1', clipId: 'a', keyframeId: 'keyframe-1',
+    } });
+    expect(tap.viewportHandle.get().keyframeTool).toBeNull();
+    tap.viewportHandle.set({ ...initial, showKeyframes: true, keyframeTool: {
+      sessionId: project.sessionId, trackId: 'v1', clipId: 'a', keyframeId: 'keyframe-1',
+    } });
+    expect(tap.viewportHandle.get().keyframeTool?.keyframeId).toBe('keyframe-1');
+    tap.viewportHandle.set({ ...tap.viewportHandle.get(), showKeyframes: false, keyframeTool: null });
+    expect(tap.viewportHandle.get()).toMatchObject({ showKeyframes: false, keyframeTool: null });
   });
 });

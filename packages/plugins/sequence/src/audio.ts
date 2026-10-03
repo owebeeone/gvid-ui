@@ -1,4 +1,4 @@
-import { BaseTap, type Grip, type GripContext } from '@owebeeone/grip-react';
+import { BaseTap, type Grip, type GripContext, type GripContextLike } from '@owebeeone/grip-react';
 import {
   GVID_ASSET_CATALOG, GVID_CHANGE_STATUS, GVID_GRAPH_VIEW, GVID_PROJECT_VIEW, GVID_SEQUENCE_AUDIO_CONTROL,
   GVID_SEQUENCE_AUDIO_VIEW, GVID_SEQUENCE_DESTINATION, GVID_SEQUENCE_VIEW,
@@ -46,6 +46,12 @@ export class SequenceAudioPreviewTap extends BaseTap {
         GVID_CHANGE_STATUS,
         GVID_SEQUENCE_VIEW, GVID_TIMELINE_TRANSPORT, GVID_ASSET_CATALOG],
     });
+  }
+
+  onAttach(home: GripContext | GripContextLike): void {
+    this.detached = false;
+    super.onAttach(home);
+    this.produce();
   }
 
   private stop(trackId: string): void {

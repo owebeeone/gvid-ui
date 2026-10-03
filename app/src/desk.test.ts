@@ -3,6 +3,7 @@ import type { GrythPlugin } from '@grythjs/plugin-api';
 import { PluginRegistryTap } from '@grythjs/plugin-api';
 import '@grythjs/plugin-settings';
 import '@gvidjs/plugin-assets';
+import '@gvidjs/plugin-effects';
 import '@gvidjs/plugin-source';
 import '@gvidjs/plugin-sequence';
 import '@gvidjs/plugin-timeline';
@@ -10,7 +11,7 @@ import { GVID_TOOLS } from '@gvidjs/contracts';
 import { GVID_DESK } from './desk';
 
 describe('GVid first-run desk', () => {
-  it('registers exactly the four GVid tools and the existing Settings tool', () => {
+  it('registers all five GVid tools and the existing Settings tool', () => {
     const ids = [...PluginRegistryTap.get().values()]
       .flatMap((plugin) => Object.keys((plugin as GrythPlugin).tools ?? {}));
     for (const id of [...Object.values(GVID_TOOLS), 'settings']) {
@@ -21,6 +22,7 @@ describe('GVid first-run desk', () => {
   it('starts with the accepted two-row four-panel arrangement', () => {
     expect(GVID_DESK.locked).toBe(true);
     expect(GVID_DESK.foundation?.layout.direction).toBe('column');
+    expect(GVID_DESK.foundation?.designate[GVID_TOOLS.effects]).toBe('source');
     const rows = GVID_DESK.foundation?.layout.children ?? [];
     expect(rows.map((row) => row.size)).toEqual([58, 42]);
     expect(rows[0]?.children?.map((panel) => [panel.id, panel.size])).toEqual([

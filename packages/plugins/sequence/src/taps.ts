@@ -1,5 +1,5 @@
 import { DESKTOP_TAB_LINKS, type DesktopTabLinkInfo } from '@grythjs/desktop';
-import { BaseTap, createAtomValueTap, type GripContext, type Tap } from '@owebeeone/grip-react';
+import { BaseTap, createAtomValueTap, type GripContext, type GripContextLike, type Tap } from '@owebeeone/grip-react';
 import {
   GVID_ASSET_CATALOG, GVID_BINDING_VIEW, GVID_CHANGE_STATUS, GVID_DEST_SEQUENCE_ID,
   GVID_DEST_TIMELINE_FRAME, GVID_DEST_VIEWER_ID, GVID_FRAME_PROVIDER, GVID_GRAPH_VIEW,
@@ -175,6 +175,12 @@ export class SequencePreviewProviderTap extends BaseTap {
         GVID_SEQUENCE_VIEW, GVID_BINDING_VIEW, GVID_ASSET_CATALOG, GVID_FRAME_PROVIDER],
     });
     this.cancelGroupId = `${tabId}:sequence:${++nextGroup}`;
+  }
+
+  onAttach(home: GripContext | GripContextLike): void {
+    this.detached = false;
+    super.onAttach(home);
+    this.produce();
   }
 
   private snapshot(): RequestSnapshot | null {

@@ -7,6 +7,7 @@
   background: var(--panel, #f4f6f7);
   font-size: 12px;
 }
+.gvid-sequence-filter { height: 0; overflow: hidden; position: absolute; width: 0; }
 
 .gvid-sequence-toolbar,
 .gvid-sequence-status,

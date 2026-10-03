@@ -62,6 +62,9 @@ function harness(sourceLink: DesktopTabLinkInfo = {
     copyClip: vi.fn(), cutClip: vi.fn(), pasteClip: vi.fn(),
     deleteClip: vi.fn(), splitClip: vi.fn(), moveClip: vi.fn(), trimClip: vi.fn(),
     addClipMarker: vi.fn(), updateClipMarker: vi.fn(),
+    addClipKeyframe: vi.fn(), deleteClipKeyframe: vi.fn(),
+    setClipEffects: vi.fn(), saveEffectsProfile: vi.fn(), applyEffectsProfile: vi.fn(),
+    addSourceMarker: vi.fn(), updateSourceMarker: vi.fn(),
   } satisfies EditorControl });
   const requests: Array<{
     key: SourceFrameKey; asset: AssetRecord; signal: AbortSignal;

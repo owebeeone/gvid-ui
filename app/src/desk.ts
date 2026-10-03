@@ -24,7 +24,7 @@ export const GVID_DESK: DesktopSetup = {
         { id: 'timeline', size: 42 },
       ],
     },
-    designate: { settings: 'assets' },
+    designate: { settings: 'assets', [GVID_TOOLS.effects]: 'source' },
     fallback: 'sequence-preview',
   },
   tools: [
